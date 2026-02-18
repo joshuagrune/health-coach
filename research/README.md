@@ -20,8 +20,12 @@ This folder documents the scientific background for the Health Coach planning ru
 | File | Topic |
 |------|-------|
 | `sources.md` | Source registry (URLs, annotations) |
-| `marathon_periodization.md` | Base → Build → Peak → Taper phases |
+| `marathon_periodization.md` | Marathon: Base → Build → Peak → Taper phases |
 | `tapering_evidence.md` | Taper duration, volume reduction |
 | `load_management_and_injury_risk.md` | Monotony, strain, ACWR, ramp rate |
 | `adaptive_rules_missed_workouts.md` | Missed-workout handling |
+| `strength_training_evidence.md` | Strength: frequency, volume, deload, progression |
+| `endurance_zone_hiit_evidence.md` | Zone 2, polarized, HIIT frequency and recovery |
+| `flexibility_mobility_evidence.md` | Stretching, ROM, foam rolling |
+| `sleep_recovery_evidence.md` | Sleep hygiene, napping, SWS, recovery |
 | `salvor_data_quality_and_limits.md` | API data quality, normalization |
