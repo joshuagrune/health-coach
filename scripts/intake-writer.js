@@ -49,7 +49,7 @@ function main() {
 function writeIntake(data) {
   ensureDir(COACH_ROOT);
   const payload = {
-    version: 1,
+    version: data.version ?? 2,
     updatedAt: new Date().toISOString(),
     ...data,
   };

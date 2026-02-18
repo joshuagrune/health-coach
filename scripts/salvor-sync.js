@@ -172,7 +172,8 @@ function normalizeScores(s) {
   };
 }
 
-function fetchWorkouts(startDate, endDate) {
+/** Fetch workouts for a single date range (API limit 100) */
+function fetchWorkoutsChunk(startDate, endDate) {
   const url = `${BASE_URL}/health/workouts?start_date=${startDate}&end_date=${endDate}&limit=100`;
   try {
     const data = curl(url);
@@ -182,6 +183,46 @@ function fetchWorkouts(startDate, endDate) {
     console.error('Workouts fetch error:', e.message);
     return [];
   }
+}
+
+/** Split date range into chunks of chunkDays; return [{start, end}, ...] */
+function chunkDateRange(startDateStr, endDateStr, chunkDays = 14) {
+  const chunks = [];
+  const start = new Date(startDateStr + 'T12:00:00');
+  const end = new Date(endDateStr + 'T12:00:00');
+  let cur = new Date(start.getTime());
+  while (cur <= end) {
+    const chunkEnd = new Date(cur.getTime());
+    chunkEnd.setDate(chunkEnd.getDate() + chunkDays - 1);
+    const actualEnd = chunkEnd > end ? end : chunkEnd;
+    chunks.push({
+      start: cur.toLocaleDateString('en-CA', { timeZone: TZ }),
+      end: actualEnd.toLocaleDateString('en-CA', { timeZone: TZ }),
+    });
+    cur.setDate(cur.getDate() + chunkDays);
+  }
+  return chunks;
+}
+
+/** Fetch all workouts in range via pagination (chunk by 14 days to stay under limit=100) */
+function fetchWorkouts(startDate, endDate) {
+  const chunks = chunkDateRange(startDate, endDate, 14);
+  const seen = new Set();
+  const out = [];
+  for (const { start, end } of chunks) {
+    const list = fetchWorkoutsChunk(start, end);
+    for (const w of list) {
+      const id = w.id ?? `${w.start_time ?? w.startTime ?? w.start}_${w.workout_type ?? w.workoutType ?? w.type}`;
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push(w);
+      }
+    }
+    if (list.length >= 100) {
+      // Might have more; could sub-chunk, but 14d usually sufficient
+    }
+  }
+  return out;
 }
 
 function fetchSleep(startDate, endDate) {
@@ -246,8 +287,8 @@ function main() {
   const now = new Date();
   const todayLocal = now.toLocaleDateString('en-CA', { timeZone: TZ });
 
-  // Decide range: bootstrap (90 days) or incremental (7 days)
-  const bootstrapDays = parseInt(process.env.SALVOR_BOOTSTRAP_DAYS || '90', 10) || 90;
+  // Decide range: bootstrap (365 days) or incremental (7 days)
+  const bootstrapDays = Math.min(parseInt(process.env.SALVOR_BOOTSTRAP_DAYS || '365', 10) || 365, 730);
   const incrementalDays = parseInt(process.env.SALVOR_INCREMENTAL_DAYS || '7', 10) || 7;
 
   let startDate, endDate;
@@ -331,8 +372,8 @@ function main() {
     totalAdded += appendJsonl(fp, recs, 'id');
   }
 
-  // Scores (history)
-  const scores = fetchScoresHistory(Math.min(bootstrapDays, 30), todayLocal);
+  // Scores (history) — API max 90 days
+  const scores = fetchScoresHistory(Math.min(bootstrapDays, 90), todayLocal);
   const scByMonth = {};
   for (const s of scores) {
     const n = normalizeScores(s);

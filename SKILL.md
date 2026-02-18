@@ -1,27 +1,26 @@
 ---
 name: health-coach
-description: Salvor-based Health Coach — onboards goals/constraints, builds health & fitness profile from Salvor data, generates milestone-based adaptive training plans (e.g. marathon), outputs workout calendar JSON. Use when users ask about training plans, marathon prep, workout scheduling, health profile, or adaptive planning.
-metadata: {"openclaw":{"requires":{"env":["SALVOR_API_KEY"]},"primaryEnv":"SALVOR_API_KEY"}}
+description: Health Coach — assessment-first, builds health & fitness profile (Salvor optional), generates multi-goal training plans (endurance, strength, bodycomp, sleep). Use when users ask about training plans, fitness profile, workout scheduling, or health goals.
+metadata: {"openclaw":{"requires":{"env":[]},"optionalEnv":["SALVOR_API_KEY"]}}
 ---
 
-# Health Coach (Salvor-based)
+# Health Coach
 
-Builds a long-term health and fitness profile from Salvor data, generates milestone-based adaptive training plans (e.g. marathon), and maintains a canonical workout calendar JSON with history + future plans.
+Assessment-first health and fitness coach. Builds a profile from Salvor data (optional but recommended) or manual intake, generates multi-goal training plans (endurance, strength, bodycomp, sleep), and maintains a workout calendar JSON.
 
 ## When to Use
 
-- "Erstelle mir einen Marathon-Trainingsplan"
-- "Wie sieht mein aktuelles Fitness-Profil aus?"
-- "Workout-Kalender für die nächsten Wochen"
-- "Ich habe ein Workout verpasst – wie passe ich den Plan an?"
-- "Zeig mir meine Trainingshistorie und den Plan bis zum Marathon"
-- "Health Coach Onboarding" / "Ziele und Constraints erfassen"
+- "Wie sieht mein aktuelles Fitness-Profil aus?" / "Show my health profile"
+- "Erstelle mir einen Trainingsplan" / "Create a training plan"
+- "Workout-Kalender" / "Workout scheduling"
+- "Ich habe ein Workout verpasst" / "Missed workout adaptation"
+- "Health Coach Onboarding" / "Ziele erfassen"
 
 ## Prerequisites
 
-- **SALVOR_API_KEY**: Injected from config when skill is enabled. Never read from .env in scripts — use `$SALVOR_API_KEY` from process env.
-- **Salvor skill**: This skill extends Salvor API usage; ensure the `salvor` skill is also enabled.
-- **Calendar (optional)**: For publishing planned sessions to Sport calendar — requires vdirsyncer + khal (see caldav-calendar skill). **Always run `vdirsyncer sync` first** before any calendar write.
+- **SALVOR_API_KEY** (optional, recommended): When set, enables automatic sync and data-driven profile. If missing, use manual intake. Never read from .env in scripts — use `$SALVOR_API_KEY` from process env.
+- **Salvor skill**: Only needed when using Salvor sync; ensure enabled if SALVOR_API_KEY is set.
+- **Calendar (optional)**: For publishing planned sessions — requires vdirsyncer + khal. **Always run `vdirsyncer sync` first** before any calendar write.
 
 ## Timezone
 
@@ -34,31 +33,51 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
 - **Derived**: `intake.json`, `profile.json`, `workout_calendar.json`, `adaptation_log.jsonl`
 - **Rolling summaries**: `workspace/current/health_profile_summary.json`, `workspace/current/training_plan_week.json`
 
+## Assessment-First Flow (MANDATORY)
+
+**Before asking any baseline or goal questions**, auto-detect state:
+
+1. Check: `workspace/health/coach/intake.json`, `profile.json`, `workout_calendar.json`, `salvor_cache/`, `workspace/current/health_profile_summary.json`
+2. If profile exists and is recent (<24h) and salvor_cache has data → summarize current state and ask what the user wants to do next.
+3. If coach/ is empty or profile missing/stale → **ask first**:
+   - "Should I sync and analyze your health data first (recommended) to evaluate your current fitness and health status? If yes, I'll run Salvor sync and build your profile. If no or you don't use Salvor, I'll ask you a few questions to estimate your baseline."
+4. **If user says yes** and SALVOR_API_KEY is set:
+   - Run `salvor-sync.js` (bootstrap 365d)
+   - Run `profile-builder.js`
+   - Summarize profile (sleep, workouts, readiness, vitals) and then ask about goals.
+5. **If user says no** or SALVOR_API_KEY is not set:
+   - Run manual intake Q&A (constraints, baseline, goals)
+   - Write `intake.json` via `intake-writer.js`
+   - Run `profile-builder.js` (builds manual profile from intake)
+   - Then ask about planning goals.
+
+**Never** start with marathon-specific questions. Marathon is one optional goal among strength, bodycomp, sleep, and general fitness.
+
 ## Interaction Flows
 
 ### 1. Onboarding (first run)
 
-If `workspace/health/coach/intake.json` is missing, run an intake conversation:
+Follow Assessment-First Flow above. Then, if intake is missing:
 
-- **Milestones**: Marathon date, priority (finish vs target time), intermediate races
-- **Constraints**: Days available, max time/day, travel, gym access, other sports (e.g. volleyball), rest days
-- **Baseline**: Current running frequency, longest recent run, injury history, perceived fitness
-- **Intensity calibration**: Race times or threshold estimate; fallback RPE zones (Zone2, Tempo, Intervals)
+- **Goals**: Endurance (marathon, half, 10k), strength, bodycomp, sleep, general fitness — ask what matters to the user
+- **Constraints**: Days available, max time/day, travel, gym access, other sports, rest days
+- **Baseline**: Training frequency, longest recent run/session, injury history, perceived fitness (running + strength)
+- **Intensity calibration**: Race times or threshold; fallback RPE zones
 - **Preferences**: Plan style, language, notification cadence
-- **Safety gates**: Pain/illness rules (when to stop and rest)
+- **Safety gates**: Pain/illness rules
 
-Then write `intake.json` and trigger profile + plan generation.
+Write `intake.json` and trigger profile + plan generation.
 
 ### 2. Profile & Plan Generation
 
-- Run Salvor sync (if needed): `node {baseDir}/scripts/salvor-sync.js`
-- Build profile: `node {baseDir}/scripts/profile-builder.js`
-- Generate plan: `node {baseDir}/scripts/plan-generator.js`
+- If Salvor available: Run `salvor-sync.js` first (bootstrap 365d), then `profile-builder.js`
+- If no Salvor: Run `profile-builder.js` (builds manual profile from intake)
+- Generate plan: `node {baseDir}/scripts/plan-generator.js` (goal-driven: endurance, strength, habits)
 
 ### 3. Adaptation (missed workouts, schedule changes)
 
-- Run reconciliation: `node {baseDir}/scripts/adaptive-replanner.js`
-- Applies rules: never cram; LR swap/shorten; Tempo swap within 48–72h; Intervals drop first; illness/travel → deload
+- Run `node {baseDir}/scripts/adaptive-replanner.js`
+- Applies rules: never cram; LR swap/shorten; Tempo swap within 48–72h; Intervals drop first; Strength missed → safe swap; illness/travel → deload
 
 ### 4. Calendar Publishing (optional)
 
@@ -69,9 +88,9 @@ Then write `intake.json` and trigger profile + plan generation.
 
 | Script | Purpose |
 |--------|---------|
-| `salvor-sync.js` | Long-term Salvor sync (workouts, sleep, vitals, activity, scores); incremental + bootstrap |
-| `profile-builder.js` | Compute `profile.json` from cache; write `health_profile_summary.json` |
-| `plan-generator.js` | Generate `workout_calendar.json` (history + planned sessions to milestone) |
+| `salvor-sync.js` | Long-term Salvor sync (workouts, sleep, vitals, activity, scores); bootstrap 365d, incremental 7d |
+| `profile-builder.js` | Compute `profile.json` from Salvor cache or intake baseline; write `health_profile_summary.json` |
+| `plan-generator.js` | Goal-driven: endurance, strength, habits; outputs `workout_calendar.json` |
 | `adaptive-replanner.js` | Reconcile actual vs planned; apply adaptation rules; append to `adaptation_log.jsonl` |
 | `calendar-publish.js` | Publish next 7–14 days to Sport calendar (dry-run supported) |
 

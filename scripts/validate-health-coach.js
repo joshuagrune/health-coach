@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Validation suite for Health Coach: timezone, matching, guardrails.
- * Run: node health/scripts/validate-health-coach.js
+ * Validation suite for Health Coach: timezone, matching, guardrails, intake v2.
+ * Run: node scripts/validate-health-coach.js
  */
 
+const fs = require('fs');
 const path = require('path');
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
@@ -12,7 +13,7 @@ const TZ = 'Europe/Berlin';
 
 function loadJson(p) {
   try {
-    return JSON.parse(require('fs').readFileSync(p, 'utf8'));
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
     return null;
   }
@@ -47,16 +48,21 @@ function testTimezone() {
   else fail('DST transition', `got ${d1}, ${d2}`);
 }
 
-// Guardrails: no back-to-back hard
+// Guardrails: no back-to-back hard (LR, Tempo, Intervals, Strength)
 function testGuardrails() {
   console.log('\n## Plan Guardrails');
-  const cal = loadJson(path.join(COACH_ROOT, 'workout_calendar.json'));
-  if (!cal) {
-    fail('load calendar', 'file missing');
+  const calPath = path.join(COACH_ROOT, 'workout_calendar.json');
+  if (!fs.existsSync(calPath)) {
+    ok('skip guardrails (no calendar yet)');
     return;
   }
+  const cal = loadJson(calPath);
   const sessions = cal?.plan?.sessions || [];
-  const hard = ['LR', 'Tempo', 'Intervals'];
+  if (sessions.length === 0) {
+    ok('skip guardrails (empty plan)');
+    return;
+  }
+  const hard = ['LR', 'Tempo', 'Intervals', 'Strength'];
   const byDate = {};
   for (const s of sessions) {
     if (!byDate[s.localDate]) byDate[s.localDate] = [];
@@ -76,10 +82,14 @@ function testGuardrails() {
   else fail('back-to-back hard', `${backToBack} violations`);
 }
 
-// Matching: planned kind vs workout type
+// Matching: planned kind vs workout type (includes Strength)
 function testMatching() {
   console.log('\n## Matching');
-  const kindMap = { LR: ['Running', 'Zone 2', 'Walking'], Z2: ['Running', 'Zone 2', 'Walking', 'Cycling'], Strength: ['Strength Training', 'Full Body', 'Flexibility', 'Climbing'] };
+  const kindMap = {
+    LR: ['Running', 'Zone 2', 'Walking'],
+    Z2: ['Running', 'Zone 2', 'Walking', 'Cycling'],
+    Strength: ['Strength Training', 'Full Body', 'Full Body A', 'Full Body B', 'Flexibility', 'Climbing', 'Gym'],
+  };
   const match = (p, w) => {
     const types = kindMap[p] || [p];
     const wt = (w.workout_type || w.workoutType || w.type || '').toLowerCase();
@@ -89,8 +99,32 @@ function testMatching() {
   else fail('LR match', 'expected true');
   if (match('Z2', { workout_type: 'Zone 2' })) ok('Z2 matches Zone 2');
   else fail('Z2 match', 'expected true');
+  if (match('Strength', { workout_type: 'Full Body' })) ok('Strength matches Full Body');
+  else fail('Strength match', 'expected true');
   if (!match('LR', { workout_type: 'Strength Training' })) ok('LR does not match Strength');
   else fail('LR mismatch', 'expected false');
+}
+
+// Intake v2: goals[] and baseline.strengthFrequencyPerWeek
+function testIntakeV2() {
+  console.log('\n## Intake Schema');
+  const intakePath = path.join(COACH_ROOT, 'intake.json');
+  if (!fs.existsSync(intakePath)) {
+    ok('skip intake v2 (no intake yet)');
+    return;
+  }
+  const intake = loadJson(intakePath);
+  if (!intake) {
+    fail('intake load', 'could not parse');
+    return;
+  }
+  const hasGoals = Array.isArray(intake.goals);
+  const hasMilestones = Array.isArray(intake.milestones);
+  const hasBaseline = intake.baseline && typeof intake.baseline === 'object';
+  if (hasGoals || hasMilestones) ok('intake has goals or milestones');
+  else fail('intake', 'missing goals/milestones');
+  if (hasBaseline) ok('intake has baseline');
+  else fail('intake', 'missing baseline');
 }
 
 function main() {
@@ -98,6 +132,7 @@ function main() {
   testTimezone();
   testGuardrails();
   testMatching();
+  testIntakeV2();
   console.log('\n---');
   console.log('Passed:', passed, 'Failed:', failed);
   process.exit(failed > 0 ? 1 : 0);

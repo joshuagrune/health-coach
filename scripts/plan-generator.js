@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * Generates workout_calendar.json from intake, profile, and Salvor cache.
- * Rule-based: Base → Build → Peak → Taper. Fits weekly schedule constraints.
- * ruleRefs: RULE_MARATHON_PHASE_*, RULE_KEY_WORKOUT_PRIORITY, RULE_NO_BACK_TO_BACK_HARD, etc.
+ * Goal-driven plan generator. Composes endurance, strength, and habit plans.
+ * Supports intake v2 (goals[]) and v1 (milestones[]). Output: workout_calendar.json.
  */
 
 const fs = require('fs');
@@ -22,9 +21,9 @@ function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function loadJson(path) {
+function loadJson(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(path, 'utf8'));
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch {
     return null;
   }
@@ -56,39 +55,38 @@ function getDayKey(dateStr) {
   return DAY_TO_KEY[d.getUTCDay()];
 }
 
-function getWeekStart(dateStr) {
-  const d = new Date(dateStr + 'T12:00:00');
-  const day = d.getUTCDay();
-  const monOffset = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + monOffset);
-  return d.toLocaleDateString('en-CA', { timeZone: TZ });
+function toDay2(d) {
+  const x = d.toLowerCase().slice(0, 3);
+  const m = { mon: 'mo', tue: 'tu', wed: 'we', thu: 'th', fri: 'fr', sat: 'sa', sun: 'su', mo: 'mo', tu: 'tu', we: 'we', th: 'th', fr: 'fr', sa: 'sa', su: 'su' };
+  return m[x] || x.slice(0, 2);
 }
 
-function main() {
-  ensureDir(COACH_ROOT);
+/** Resolve goals: v2 goals[] or v1 milestones[] */
+function resolveGoals(intake) {
+  const goals = intake.goals || [];
+  const milestones = intake.milestones || [];
+  const hasEndurance = milestones.some((m) => m.kind === 'marathon') || goals.some((g) => g.kind === 'endurance' || g.subKind === 'marathon');
+  const hasStrength = goals.some((g) => g.kind === 'strength');
+  const hasSleep = goals.some((g) => g.kind === 'sleep');
+  const hasBodycomp = goals.some((g) => g.kind === 'bodycomp');
+  const hasGeneral = goals.some((g) => g.kind === 'general') || (goals.length === 0 && milestones.length === 0);
+  const enduranceMilestone = milestones.find((m) => m.kind === 'marathon') || milestones[0];
+  return { hasEndurance, hasStrength, hasSleep, hasBodycomp, hasGeneral, enduranceMilestone };
+}
 
-  const intake = loadJson(INTAKE_FILE);
-  const profile = loadJson(PROFILE_FILE);
-  const workouts = loadJsonlFiles('workouts_');
+/** Generate endurance (marathon) sessions */
+function planEndurance(intake, profile, today, constraints) {
+  const milestone = intake.milestones?.find((m) => m.kind === 'marathon') || intake.milestones?.[0];
+  if (!milestone) return [];
 
-  if (!intake || !intake.milestones?.length) {
-    console.error('No intake.json or milestones. Run onboarding first.');
-    process.exit(1);
-  }
-
-  const milestone = intake.milestones.find((m) => m.kind === 'marathon') || intake.milestones[0];
-  const milestoneDate = milestone.dateLocal;
-  const constraints = intake.constraints || {};
-  const toDay2 = (d) => { const x = d.toLowerCase().slice(0, 3); const m = { mon:'mo',tue:'tu',wed:'we',thu:'th',fri:'fr',sat:'sa',sun:'su',mo:'mo',tu:'tu',we:'we',th:'th',fr:'fr',sa:'sa',su:'su' }; return m[x] || x.slice(0,2); };
   const daysAvailable = (constraints.daysAvailable || ['mo', 'tu', 'th', 'fr', 'sa']).map(toDay2);
   const restDays = (constraints.preferredRestDays || ['we', 'su']).map(toDay2);
   const maxMinutes = constraints.maxMinutesPerDay || 90;
 
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+  const milestoneDate = milestone.dateLocal;
   const totalDays = Math.ceil((new Date(milestoneDate) - new Date(today)) / (24 * 60 * 60 * 1000));
   const totalWeeks = Math.max(1, Math.floor(totalDays / 7));
 
-  // Phase split: taper 2w, peak 4w, build 6w, base rest (RULE_MARATHON_TAPER_2W, RULE_MARATHON_PHASE_*)
   const taperWeeks = 2;
   const peakWeeks = 4;
   const buildWeeks = 6;
@@ -97,39 +95,21 @@ function main() {
   const baselineLR = profile?.workouts?.longestRunMinutes || 45;
   const baselineWeekly = profile?.workouts?.totalDurationMinutes || 120;
   const weeklyCap = maxMinutes * (daysAvailable.length || 4);
-
-  const historyWorkouts = workouts.map((w) => ({
-    id: (typeof w.id === 'string' && w.id.startsWith('salvor:')) ? w.id : `salvor:${w.id}`,
-    type: w.workout_type || w.workoutType || w.type || 'Workout',
-    startTimeUtc: w.startTimeUtc || w.start_time || w.startTime || w.start,
-    localDate: w.localDate || w.date,
-    durationSeconds: w.duration_seconds ?? w.durationSeconds ?? w.duration ?? 0,
-    distanceMeters: w.distance_meters ?? w.distanceMeters ?? null,
-    avgHeartRate: w.avg_heart_rate ?? w.avgHeartRate ?? null,
-    source: w.source || 'salvor',
-  }));
+  const RAMP_CAP = 1.08;
+  const LR_RATIO = 0.35;
 
   const sessions = [];
-  let weekIndex = 0;
   let currentLR = baselineLR;
   let currentWeekly = baselineWeekly;
-  const RAMP_CAP = 1.08; // RULE_WEEKLY_RAMP_CAP
-  const LR_RATIO = 0.35; // RULE_LR_RATIO_CAP
 
   for (let w = 0; w < totalWeeks; w++) {
     const weekStart = addDays(today, w * 7);
     const phase = w < baseWeeks ? 'base' : w < baseWeeks + buildWeeks ? 'build' : w < baseWeeks + buildWeeks + peakWeeks ? 'peak' : 'taper';
 
-    // Weekly volume (RULE_MARATHON_TAPER_2W for taper)
     let weekTarget = currentWeekly;
-    if (phase === 'taper') {
-      weekTarget = Math.round(currentWeekly * 0.5); // 41-60% reduction
-    } else if (phase !== 'base') {
-      weekTarget = Math.min(Math.round(currentWeekly * RAMP_CAP), weeklyCap);
-    }
+    if (phase === 'taper') weekTarget = Math.round(currentWeekly * 0.5);
+    else if (phase !== 'base') weekTarget = Math.min(Math.round(currentWeekly * RAMP_CAP), weeklyCap);
     currentWeekly = weekTarget;
-
-    // Cutback every 4th week (RULE_CUTBACK_WEEKS)
     if (w > 0 && w % 4 === 3 && phase !== 'taper') {
       weekTarget = Math.round(weekTarget * 0.8);
       currentWeekly = weekTarget;
@@ -143,23 +123,21 @@ function main() {
       const isAvail = daysAvailable.includes(key) && !isRest;
       weekDays.push({ dateStr, key, isRest, isAvail });
     }
-
     const availSlots = weekDays.filter((s) => s.isAvail);
-    const hardTypes = ['LR', 'Tempo', 'Intervals'];
-    let hardCount = 0;
     const usedDates = new Set();
+    let hardCount = 0;
 
-    // Assign LR (RULE_KEY_WORKOUT_PRIORITY)
     if (phase !== 'taper' && availSlots.length >= 1) {
       const lrSlot = availSlots.find((s) => {
         const prev = addDays(s.dateStr, -1);
         const next = addDays(s.dateStr, 1);
-        return !usedDates.has(prev) && !usedDates.has(next); // RULE_NO_BACK_TO_BACK_HARD
+        return !usedDates.has(prev) && !usedDates.has(next);
       }) || availSlots[availSlots.length - 1];
       const lrMin = phase === 'peak' ? Math.min(currentLR + 15, weekTarget * LR_RATIO) : phase === 'build' ? currentLR + 5 : currentLR;
       const lrDuration = Math.min(Math.round(lrMin), maxMinutes);
       sessions.push({
         id: `sess_${milestone.id}_w${w}_lr`,
+        programId: milestone.id,
         milestoneId: milestone.id,
         weekIndex: w,
         localDate: lrSlot.dateStr,
@@ -169,40 +147,37 @@ function main() {
         status: 'planned',
         actualWorkoutId: null,
         calendar: { khalUid: null },
-        ruleRefs: ['RULE_KEY_WORKOUT_PRIORITY', 'RULE_NO_BACK_TO_BACK_HARD', 'RULE_LR_RATIO_CAP'],
+        ruleRefs: ['RULE_KEY_WORKOUT_PRIORITY', 'RULE_NO_BACK_TO_BACK_HARD'],
       });
       usedDates.add(lrSlot.dateStr);
       hardCount++;
       if (phase !== 'taper') currentLR = lrDuration;
     }
 
-    // Assign Tempo or Intervals (max 1 more hard - RULE_MAX_HARD_SESSIONS_WEEK)
-    // RULE_NO_BACK_TO_BACK_HARD: Tempo must not be adjacent to LR
     const lrDate = sessions.filter((s) => s.weekIndex === w && s.kind === 'LR')[0]?.localDate;
     const hardAdjacent = lrDate ? new Set([addDays(lrDate, -1), addDays(lrDate, 1)]) : new Set();
     if (phase !== 'base' && phase !== 'taper' && hardCount < 2) {
       const tempoSlot = availSlots.find((s) => !usedDates.has(s.dateStr) && !hardAdjacent.has(s.dateStr));
       if (tempoSlot) {
-        const tempoMin = phase === 'peak' ? 35 : 30;
         sessions.push({
           id: `sess_${milestone.id}_w${w}_tempo`,
+          programId: milestone.id,
           milestoneId: milestone.id,
           weekIndex: w,
           localDate: tempoSlot.dateStr,
           title: phase === 'peak' ? 'Marathon Pace' : 'Tempo',
           kind: 'Tempo',
-          targets: { durationMinutes: tempoMin, distanceMeters: null, intensity: 'threshold' },
+          targets: { durationMinutes: phase === 'peak' ? 35 : 30, distanceMeters: null, intensity: 'threshold' },
           status: 'planned',
           actualWorkoutId: null,
           calendar: { khalUid: null },
-          ruleRefs: ['RULE_MARATHON_PHASE_BUILD', 'RULE_MAX_HARD_SESSIONS_WEEK'],
+          ruleRefs: ['RULE_MARATHON_PHASE_BUILD'],
         });
         usedDates.add(tempoSlot.dateStr);
         hardCount++;
       }
     }
 
-    // Fill remaining with Z2, Strength, or Rest
     const remaining = availSlots.filter((s) => !usedDates.has(s.dateStr));
     const z2PerWeek = phase === 'taper' ? 1 : 2;
     let z2Count = 0;
@@ -210,6 +185,7 @@ function main() {
       if (z2Count < z2PerWeek) {
         sessions.push({
           id: `sess_${milestone.id}_w${w}_z2_${z2Count}`,
+          programId: milestone.id,
           milestoneId: milestone.id,
           weekIndex: w,
           localDate: slot.dateStr,
@@ -225,12 +201,13 @@ function main() {
       } else {
         sessions.push({
           id: `sess_${milestone.id}_w${w}_str_${z2Count}`,
+          programId: milestone.id,
           milestoneId: milestone.id,
           weekIndex: w,
           localDate: slot.dateStr,
           title: 'Full Body',
           kind: 'Strength',
-          targets: { durationMinutes: Math.min(60, maxMinutes), distanceMeters: null, intensity: 'moderate' },
+          targets: { durationMinutes: Math.min(60, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' },
           status: 'planned',
           actualWorkoutId: null,
           calendar: { khalUid: null },
@@ -239,21 +216,141 @@ function main() {
       }
     }
   }
+  return sessions;
+}
+
+/** Generate strength-only or general plan (4 weeks). No back-to-back Strength days. */
+function planStrength(intake, profile, today, constraints) {
+  const daysAvailable = (constraints.daysAvailable || ['mo', 'tu', 'th', 'fr', 'sa']).map(toDay2);
+  const restDays = (constraints.preferredRestDays || ['we', 'su']).map(toDay2);
+  const maxMinutes = constraints.maxMinutesPerDay || 90;
+  const strengthPerWeek = profile?.workouts?.strengthCount ? Math.ceil(profile.workouts.strengthCount / 4) : 2;
+  const totalWeeks = 4;
+  const programId = 'strength_1';
+
+  const sessions = [];
+  const usedDates = new Set();
+
+  for (let w = 0; w < totalWeeks; w++) {
+    const weekStart = addDays(today, w * 7);
+    const weekDays = [];
+    for (let d = 0; d < 7; d++) {
+      const dateStr = addDays(weekStart, d);
+      const key = getDayKey(dateStr);
+      const isRest = restDays.includes(key);
+      const isAvail = daysAvailable.includes(key) && !isRest;
+      weekDays.push({ dateStr, key, isRest, isAvail });
+    }
+    const availSlots = weekDays.filter((s) => s.isAvail);
+    let strCount = 0;
+    let z2Count = 0;
+
+    for (const slot of availSlots) {
+      const prev = addDays(slot.dateStr, -1);
+      const next = addDays(slot.dateStr, 1);
+      const adjHasStrength = usedDates.has(prev) || usedDates.has(next);
+
+      if (strCount < strengthPerWeek && !adjHasStrength) {
+        sessions.push({
+          id: `sess_${programId}_w${w}_str_${strCount}`,
+          programId,
+          weekIndex: w,
+          localDate: slot.dateStr,
+          title: strCount === 0 ? 'Full Body A' : 'Full Body B',
+          kind: 'Strength',
+          targets: { durationMinutes: Math.min(60, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' },
+          status: 'planned',
+          actualWorkoutId: null,
+          calendar: { khalUid: null },
+          ruleRefs: ['RULE_STRENGTH_PROGRESSION', 'RULE_NO_BACK_TO_BACK_HARD'],
+        });
+        usedDates.add(slot.dateStr);
+        strCount++;
+      } else if (z2Count < 2) {
+        sessions.push({
+          id: `sess_${programId}_w${w}_z2_${z2Count}`,
+          programId,
+          weekIndex: w,
+          localDate: slot.dateStr,
+          title: 'Zone 2',
+          kind: 'Z2',
+          targets: { durationMinutes: Math.min(45, maxMinutes), intensity: 'Z2' },
+          status: 'planned',
+          actualWorkoutId: null,
+          calendar: { khalUid: null },
+          ruleRefs: ['RULE_CARDIO_SUPPORT'],
+        });
+        z2Count++;
+      }
+    }
+  }
+  return sessions;
+}
+
+/** Generate habit recommendations for sleep/bodycomp */
+function planHabits(goals) {
+  const recs = [];
+  if (goals.some((g) => g.kind === 'sleep')) {
+    recs.push({ kind: 'sleep', title: 'Sleep protocol', text: 'Aim for 7–9h; Deep >50min, REM >100min. Consistent bedtime.' });
+  }
+  if (goals.some((g) => g.kind === 'bodycomp')) {
+    recs.push({ kind: 'bodycomp', title: 'Nutrition', text: 'Protein ~1.8g/kg; carbs around training; avoid late fat.' });
+  }
+  return recs;
+}
+
+function main() {
+  ensureDir(COACH_ROOT);
+
+  const intake = loadJson(INTAKE_FILE);
+  const profile = loadJson(PROFILE_FILE);
+  const workouts = loadJsonlFiles('workouts_');
+
+  if (!intake) {
+    console.error('No intake.json. Run onboarding first.');
+    process.exit(1);
+  }
+
+  const { hasEndurance, hasStrength, hasSleep, hasBodycomp, hasGeneral, enduranceMilestone } = resolveGoals(intake);
+  const constraints = intake.constraints || {};
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+
+  let sessions = [];
+  const recommendations = planHabits(intake.goals || []);
+
+  if (hasEndurance && enduranceMilestone) {
+    sessions = planEndurance(intake, profile, today, constraints);
+  } else if (hasStrength || hasGeneral) {
+    sessions = planStrength(intake, profile, today, constraints);
+  } else {
+    sessions = planStrength(intake, profile, today, constraints);
+  }
+
+  const historyWorkouts = workouts.map((w) => ({
+    id: (typeof w.id === 'string' && w.id.startsWith('salvor:')) ? w.id : `salvor:${w.id}`,
+    type: w.workout_type || w.workoutType || w.type || 'Workout',
+    startTimeUtc: w.startTimeUtc || w.start_time || w.startTime || w.start,
+    localDate: w.localDate || w.date,
+    durationSeconds: w.duration_seconds ?? w.durationSeconds ?? w.duration ?? 0,
+    distanceMeters: w.distance_meters ?? w.distanceMeters ?? null,
+    avgHeartRate: w.avg_heart_rate ?? w.avgHeartRate ?? null,
+    source: w.source || 'salvor',
+  }));
 
   const calendar = {
-    schemaVersion: '1.0',
+    schemaVersion: '1.1',
     timeZone: TZ,
     generatedAt: new Date().toISOString(),
     sources: { salvor: { baseUrl: 'https://api.salvor.eu', lastSyncAt: loadJson(path.join(COACH_ROOT, 'salvor_sync_state.json'))?.lastSuccessfulSyncAt || null } },
-    milestones: intake.milestones,
+    goals: intake.goals || [],
+    milestones: intake.milestones || [],
     history: { workouts: historyWorkouts },
-    plan: { sessions },
+    plan: { sessions, recommendations },
     adaptation: { events: [] },
   };
 
   fs.writeFileSync(CALENDAR_FILE, JSON.stringify(calendar, null, 2), 'utf8');
 
-  // Write rolling summary for next week
   const nextWeekSessions = sessions.filter((s) => {
     const d = new Date(s.localDate + 'T12:00:00');
     const t = new Date(today + 'T12:00:00');
@@ -267,7 +364,8 @@ function main() {
     'utf8'
   );
 
-  console.log('Plan generated. Sessions:', sessions.length, 'Weeks:', totalWeeks, 'Milestone:', milestoneDate);
+  const milestoneInfo = enduranceMilestone ? enduranceMilestone.dateLocal : 'general';
+  console.log('Plan generated. Sessions:', sessions.length, 'Recommendations:', recommendations.length, 'Milestone:', milestoneInfo);
 }
 
 main();

@@ -37,12 +37,16 @@ Add to `~/.openclaw/openclaw.json`:
 }
 ```
 
-Same key as `salvor` skill if you use Salvor.
+**Salvor is optional.** If `SALVOR_API_KEY` is set, the skill can sync and analyze your health data automatically. If not set, the agent will use manual intake to build your profile.
+
+## Assessment-First Flow
+
+On first use, the agent asks: "Should I sync and analyze your health data first (recommended)?" If yes and key exists, it runs `salvor-sync.js` then `profile-builder.js`. If no, it does manual intake and builds a profile from your answers.
 
 ## First Run
 
-1. Ensure `SALVOR_API_KEY` is set (via config or env).
-2. Run `node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js` (bootstrap).
+1. (Optional) Set `SALVOR_API_KEY` in config or env for data-driven profile.
+2. Run `node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js` (bootstrap 365d) — only if using Salvor.
 3. Run `node ~/.openclaw/skills/health-coach/scripts/intake-from-goals.js` (or complete onboarding).
 4. Run `node ~/.openclaw/skills/health-coach/scripts/profile-builder.js`.
 5. Run `node ~/.openclaw/skills/health-coach/scripts/plan-generator.js`.

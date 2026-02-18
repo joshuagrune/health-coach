@@ -18,8 +18,9 @@ const TZ = 'Europe/Berlin';
 const TIME_WINDOW_MIN = 30; // ±30 min match
 const KIND_MAP = {
   'Long Run': 'LR', 'Long Run (MP segments)': 'LR', 'Zone 2': 'Z2', 'Tempo': 'Tempo', 'Marathon Pace': 'Tempo',
-  'Intervals': 'Intervals', 'Full Body': 'Strength', 'Strength Training': 'Strength', 'Flexibility': 'Flexibility',
-  'Running': 'Z2', 'Walking': 'Z2', 'Climbing': 'Strength', 'Cycling': 'Z2',
+  'Intervals': 'Intervals', 'Full Body': 'Strength', 'Full Body A': 'Strength', 'Full Body B': 'Strength',
+  'Strength Training': 'Strength', 'Flexibility': 'Strength', 'Running': 'Z2', 'Walking': 'Z2',
+  'Climbing': 'Strength', 'Cycling': 'Z2', 'Mind and Body': 'Strength',
 };
 
 function loadJson(p) {
@@ -59,7 +60,7 @@ function kindMatch(plannedKind, workoutType) {
   if (p === w) return true;
   if (p === 'lr' && /run|zone|walking/i.test(workoutType)) return true;
   if (p === 'z2' && /run|zone|walking|cycling/i.test(workoutType)) return true;
-  if (p === 'strength' && /strength|full body|flexibility|climbing/i.test(workoutType)) return true;
+  if (p === 'strength' && /strength|full body|flexibility|climbing|gym|hypertrophy|mind and body/i.test(workoutType)) return true;
   if (p === 'tempo' && /run|interval/i.test(workoutType)) return true;
   if (p === 'intervals' && /interval|run/i.test(workoutType)) return true;
   return false;
@@ -122,6 +123,13 @@ function main() {
         changed++;
         const rule = s.kind === 'LR' ? 'RULE_LR_MISSED_SWAP_OR_SHORTEN' : s.kind === 'Tempo' ? 'RULE_TEMPO_MISSED_SWAP' : 'RULE_INTERVALS_MISSED_DROP';
         events.push({ at: new Date().toISOString(), reason: `missed_${s.kind.toLowerCase()}`, sessionId: s.id, ruleRefs: [rule], evidenceRefs: ['SRC003'] });
+      } else if (s.kind === 'Strength') {
+        s.status = 'missed';
+        changed++;
+        events.push({ at: new Date().toISOString(), reason: 'missed_strength', sessionId: s.id, ruleRefs: ['RULE_STRENGTH_MISSED_SWAP'], evidenceRefs: ['SRC003'] });
+      } else if (s.kind === 'Z2') {
+        s.status = 'skipped';
+        changed++;
       } else {
         s.status = 'skipped';
         changed++;

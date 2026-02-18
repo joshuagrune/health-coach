@@ -1,13 +1,28 @@
 {
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-02-18T00:00:00.000Z",
+  "goals": [
+    {
+      "id": "marathon_2026",
+      "kind": "endurance",
+      "subKind": "marathon",
+      "dateLocal": "2026-10-11",
+      "priority": "target_time",
+      "targetTimeSeconds": 14400
+    },
+    {
+      "id": "strength_1",
+      "kind": "strength",
+      "priority": "moderate"
+    }
+  ],
   "milestones": [
     {
       "id": "marathon_2026",
       "kind": "marathon",
-      "dateLocal": "2026-06-15",
-      "priority": "finish",
-      "targetTimeSeconds": null
+      "dateLocal": "2026-10-11",
+      "priority": "target_time",
+      "targetTimeSeconds": 14400
     }
   ],
   "constraints": {
@@ -20,8 +35,11 @@
   "baseline": {
     "runningFrequencyPerWeek": 2,
     "longestRecentRunMinutes": 60,
+    "strengthFrequencyPerWeek": 2,
+    "longestStrengthSessionMinutes": 60,
     "injuryHistory": [],
-    "perceivedFitness": "moderate"
+    "perceivedFitness": "moderate",
+    "perceivedStrength": "moderate"
   },
   "intensityCalibration": {
     "recentRaceTimeSeconds": null,

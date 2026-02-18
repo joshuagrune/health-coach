@@ -1,16 +1,16 @@
-# Health Coach Skill (Salvor-based)
+# Health Coach Skill
 
-OpenClaw skill for milestone-based adaptive training plans (e.g. marathon), health profiles from Salvor data, and workout calendar JSON.
+Assessment-first health and fitness coach for OpenClaw. Builds a profile from Salvor data (optional) or manual intake, generates multi-goal training plans (endurance, strength, bodycomp, sleep), and maintains a workout calendar JSON.
 
 ## Features
 
-- **Onboarding**: Goals, constraints, safety gates → `intake.json`
-- **Salvor sync**: Long-term workouts, sleep, vitals, activity, scores
-- **Profile**: Baselines, trends, flags (sleep, load, readiness)
-- **Plan**: Base → Build → Peak → Taper; fits weekly schedule
-- **Adaptation**: Missed-workout reconciliation; audit trail
-- **Calendar publish**: Optional khal integration (dry-run supported)
-- **Research**: Scientific background in `research/` with ruleId→sourceId traceability
+- **Assessment-first**: Agent asks to sync/analyze health data before baseline questions.
+- **Salvor optional**: Works with or without Salvor; manual intake fallback.
+- **Multi-goal planning**: Endurance (marathon), strength, bodycomp, sleep, general fitness.
+- **Profile**: Cross-domain (endurance, strength, sleep, body) from Salvor or intake.
+- **Adaptation**: Missed-workout reconciliation for LR, Tempo, Intervals, Strength.
+- **Calendar publish**: Optional khal integration (dry-run supported).
+- **Research**: Scientific background in `research/` with ruleId→sourceId traceability.
 
 ## Install
 
@@ -22,11 +22,11 @@ All scripts live in `scripts/` within this skill folder. See [scripts/README.md]
 
 | Script | Purpose |
 |--------|---------|
-| salvor-sync.js | Long-term Salvor sync |
-| intake-from-goals.js | Pre-populate intake from goals.md |
+| salvor-sync.js | Long-term Salvor sync (bootstrap 365d, paginated) |
+| intake-from-goals.js | Pre-populate intake from goals.md (schema v2) |
 | intake-writer.js | Write intake.json from JSON |
-| profile-builder.js | Build profile.json |
-| plan-generator.js | Generate workout_calendar.json |
+| profile-builder.js | Build profile from Salvor or manual intake |
+| plan-generator.js | Goal-driven: endurance, strength, habits |
 | adaptive-replanner.js | Reconcile actual vs planned |
 | calendar-publish.js | Publish to Sport calendar |
 | validate-health-coach.js | Validation suite |
