@@ -57,59 +57,26 @@ On first use, the agent asks: "Should I sync and analyze your health data first 
 4. Run `node ~/.openclaw/skills/health-coach/scripts/profile-builder.js`.
 5. Run `node ~/.openclaw/skills/health-coach/scripts/plan-generator.js`.
 
-## Workout Analysis
+## Analysis Scripts (`scripts/analysis/`)
 
-- **workout-analysis.js**: Compare metrics across workouts of the same type (Running, Strength, Cycling, etc.). Extracts pace, HR, GCT, stride, power, etc., and compares latest vs previous.
+All analysis scripts live in `scripts/analysis/`:
 
-```bash
-node ~/.openclaw/skills/health-coach/scripts/workout-analysis.js [--type Running] [--days 90] [--summary]
-```
-
-- `--type Running` — filter by workout type
-- `--days 90` — look back 90 days (default)
-- `--summary` — human-readable text output
-- `--text` — pretty-print JSON
-
-**workout-volume-trend.js** — Training volume per week/month:
-
-```bash
-node ~/.openclaw/skills/health-coach/scripts/workout-volume-trend.js [--type Running] [--days 180] [--period week|month] [--summary]
-```
-
-**pace-at-hr-trend.js** — Pace at HR zone (e.g. Z2) over time:
+| Script | Purpose |
+|--------|---------|
+| workout-analysis.js | Compare metrics across same-type workouts (pace, HR, GCT, stride, power) |
+| workout-volume-trend.js | Training volume per week/month |
+| pace-at-hr-trend.js | Pace at HR zone (Z2) over time |
+| sleep-trend.js | Sleep: total, deep, REM, weekday vs weekend, consistency |
+| weekly-summary.js | Volume, sleep, readiness; writes `health_weekly_summary.json` |
+| load-management.js | Acute:Chronic Load Ratio (injury risk) |
+| running-form-trend.js | GCT, stride length, vertical oscillation |
+| vitals-trend.js | RHR, HRV, weight, VO2max over time |
 
 ```bash
-node ~/.openclaw/skills/health-coach/scripts/pace-at-hr-trend.js [--hr-min 130] [--hr-max 150] [--days 180] [--summary]
-```
-
-**sleep-trend.js** — Sleep analysis (total, deep, REM, weekday vs weekend, consistency):
-
-```bash
-node ~/.openclaw/skills/health-coach/scripts/sleep-trend.js [--days 90] [--period week|month] [--summary]
-```
-
-**weekly-summary.js** — Weekly summary (volume, sleep, readiness); writes `workspace/current/health_weekly_summary.json`:
-
-```bash
-node ~/.openclaw/skills/health-coach/scripts/weekly-summary.js [--days 7] [--text]
-```
-
-**load-management.js** — Acute:Chronic Load Ratio (injury risk):
-
-```bash
-node ~/.openclaw/skills/health-coach/scripts/load-management.js [--type Running] [--summary]
-```
-
-**running-form-trend.js** — Running form (GCT, stride length, vertical oscillation):
-
-```bash
-node ~/.openclaw/skills/health-coach/scripts/running-form-trend.js [--days 180] [--summary]
-```
-
-**vitals-trend.js** — RHR, HRV, weight, VO2max over time:
-
-```bash
-node ~/.openclaw/skills/health-coach/scripts/vitals-trend.js [--days 90] [--summary]
+# Examples
+node ~/.openclaw/skills/health-coach/scripts/analysis/workout-analysis.js [--type Running] [--summary]
+node ~/.openclaw/skills/health-coach/scripts/analysis/weekly-summary.js [--days 7] [--text]
+node ~/.openclaw/skills/health-coach/scripts/analysis/vitals-trend.js [--days 365] [--period month] [--summary]
 ```
 
 ## Reconcile (optional)
@@ -129,7 +96,7 @@ crontab -e
 **Daily** (e.g. 07:30 — adjust to your wake-up + 30 min) — sync Salvor data, rebuild profile, weekly summary:
 
 ```
-30 7 * * * SALVOR_API_KEY=your_key OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js && node ~/.openclaw/skills/health-coach/scripts/profile-builder.js && node ~/.openclaw/skills/health-coach/scripts/weekly-summary.js
+30 7 * * * SALVOR_API_KEY=your_key OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js && node ~/.openclaw/skills/health-coach/scripts/profile-builder.js && node ~/.openclaw/skills/health-coach/scripts/analysis/weekly-summary.js
 ```
 
 **Daily** (e.g. 07:45 — 15 min after sync) — reconcile planned vs actual:

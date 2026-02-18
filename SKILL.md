@@ -120,6 +120,7 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 
 ## Scripts (in `{baseDir}/scripts/`)
 
+**Core** (root):
 | Script | Purpose |
 |--------|---------|
 | `salvor-sync.js` | Long-term Salvor sync (workouts, sleep, vitals, activity, scores); bootstrap 365d, incremental 7d |
@@ -130,11 +131,15 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 | `calendar-reconcile.js` | Reconcile moved/deleted calendar events; reads vdirsyncer storage |
 | `calendar-publish.js` | Publish next 7–14 days to Sport calendar (dry-run supported) |
 | `status-writer.js` | Set/clear status (illness, injury, travel, deload); respects status in publish/replan |
-| `workout-analysis.js` | Compare metrics across workouts of same type (pace, HR, GCT, stride, power); `--type Running`, `--summary` |
+
+**Analysis** (`scripts/analysis/`):
+| Script | Purpose |
+|--------|---------|
+| `workout-analysis.js` | Compare metrics across same-type workouts (pace, HR, GCT, stride, power); `--type Running`, `--summary` |
 | `workout-volume-trend.js` | Volume per week/month; `--type Running`, `--period week|month`, `--summary` |
 | `pace-at-hr-trend.js` | Pace at HR zone (Z2) over time; `--hr-min`, `--hr-max`, `--summary` |
 | `sleep-trend.js` | Sleep: total, deep, REM, weekday vs weekend, consistency; `--summary` |
-| `weekly-summary.js` | Consolidates volume, sleep, readiness for quick overview; writes `health_weekly_summary.json`; `--text` |
+| `weekly-summary.js` | Consolidates volume, sleep, readiness; writes `health_weekly_summary.json`; `--text` |
 | `load-management.js` | Acute:Chronic Load Ratio (injury risk); `--type Running`, `--summary` |
 | `running-form-trend.js` | GCT, stride, vertical oscillation over time; `--summary` |
 | `vitals-trend.js` | RHR, HRV, weight, VO2max over time; `--summary` |
@@ -148,7 +153,7 @@ When the user has an active plan and hasn't interacted recently, consider:
 - **Sleep deficit** (profile.flags.sleepDeficit): "Your sleep was below average recently. Should I reduce intensity this week?"
 - **Low readiness** (profile.flags.lowReadiness): "Readiness is low — light sessions or rest today?"
 
-Run `weekly-summary.js` or read `health_weekly_summary.json` for quick context before check-ins.
+Run `scripts/analysis/weekly-summary.js` or read `health_weekly_summary.json` for quick context before check-ins.
 
 ## Safety
 

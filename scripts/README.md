@@ -17,7 +17,11 @@ All scripts use `OPENCLAW_WORKSPACE` (default `~/.openclaw/workspace`) for data 
 | `status-helper.js` | Shared helper: `isDateInStatusBlock`, `getStatus` |
 | `validate-health-coach.js` | Validation suite: timezone, guardrails, matching, intake v3, calendar consistency |
 | `run-scenario-tests.js` | E2E scenario tests: endurance-only, strength-only, endurance+strength, fixed-appointments |
-| `workout-analysis.js` | Compare metrics across workouts of same type (pace, HR, GCT, stride, power); `--type Running`, `--summary` |
+
+**Analysis** (`analysis/`):
+| Script | Purpose |
+|--------|---------|
+| `workout-analysis.js` | Compare metrics across same-type workouts (pace, HR, GCT, stride, power); `--type Running`, `--summary` |
 | `workout-volume-trend.js` | Volume per week/month; `--type Running`, `--period week|month`, `--summary` |
 | `pace-at-hr-trend.js` | Pace at HR zone (Z2) over time; `--hr-min`, `--hr-max`, `--summary` |
 | `sleep-trend.js` | Sleep: total, deep, REM, weekday vs weekend, consistency; `--summary` |
