@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "updatedAt": "2026-02-18T00:00:00.000Z",
   "goals": [
     {
@@ -27,19 +27,23 @@
   ],
   "constraints": {
     "daysAvailable": ["mo", "tu", "th", "fr", "sa"],
+    "preferredRestDays": ["wed", "sun"],
     "maxMinutesPerDay": 90,
+    "maxSessionsPerWeek": null,
     "gymAccess": true,
-    "otherSports": ["volleyball"],
-    "preferredRestDays": ["wed", "sun"]
+    "otherSports": [],
+    "fixedAppointments": []
   },
   "baseline": {
     "runningFrequencyPerWeek": 2,
     "longestRecentRunMinutes": 60,
     "strengthFrequencyPerWeek": 2,
     "longestStrengthSessionMinutes": 60,
+    "strengthSplitPreference": "full_body",
     "injuryHistory": [],
     "perceivedFitness": "moderate",
-    "perceivedStrength": "moderate"
+    "perceivedStrength": "moderate",
+    "trainingHistoryByModality": {}
   },
   "intensityCalibration": {
     "recentRaceTimeSeconds": null,
@@ -48,7 +52,7 @@
   },
   "preferences": {
     "planStyle": "minimal",
-    "language": "de",
+    "language": "en",
     "notificationCadence": "weekly"
   },
   "safetyGates": {

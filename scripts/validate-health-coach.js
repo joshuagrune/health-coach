@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Validation suite for Health Coach: timezone, matching, guardrails, intake v2.
+ * Validation suite for Health Coach: timezone, matching, guardrails, intake v3.
  * Run: node scripts/validate-health-coach.js
  */
 
@@ -105,12 +105,12 @@ function testMatching() {
   else fail('LR mismatch', 'expected false');
 }
 
-// Intake v2: goals[] and baseline.strengthFrequencyPerWeek
-function testIntakeV2() {
-  console.log('\n## Intake Schema');
+// Intake v3: goals[], baseline.strengthSplitPreference, constraints.fixedAppointments
+function testIntakeV3() {
+  console.log('\n## Intake Schema v3');
   const intakePath = path.join(COACH_ROOT, 'intake.json');
   if (!fs.existsSync(intakePath)) {
-    ok('skip intake v2 (no intake yet)');
+    ok('skip intake v3 (no intake yet)');
     return;
   }
   const intake = loadJson(intakePath);
@@ -121,10 +121,63 @@ function testIntakeV2() {
   const hasGoals = Array.isArray(intake.goals);
   const hasMilestones = Array.isArray(intake.milestones);
   const hasBaseline = intake.baseline && typeof intake.baseline === 'object';
+  const hasFixedAppointments = Array.isArray(intake.constraints?.fixedAppointments);
   if (hasGoals || hasMilestones) ok('intake has goals or milestones');
   else fail('intake', 'missing goals/milestones');
   if (hasBaseline) ok('intake has baseline');
   else fail('intake', 'missing baseline');
+  if (hasFixedAppointments) ok('intake constraints.fixedAppointments present');
+  else ok('intake fixedAppointments (optional, may be absent)');
+}
+
+// Intake validation module: required fields, day keys
+function testIntakeValidation() {
+  console.log('\n## Intake Validation Module');
+  const { validateIntakeV3 } = require('./intake-validation');
+  const r1 = validateIntakeV3({ constraints: { daysAvailable: [] } });
+  if (!r1.valid && r1.errors.some((e) => e.includes('daysAvailable'))) ok('validation rejects empty daysAvailable');
+  else fail('intake validation', 'expected daysAvailable error');
+  const r2 = validateIntakeV3({ constraints: { daysAvailable: ['mo', 'tu'] }, goals: [] });
+  if (r2.valid) ok('validation accepts valid intake');
+  else fail('intake validation', 'expected valid');
+  const r3 = validateIntakeV3({ constraints: { daysAvailable: ['mo', 'invalid'] } });
+  if (!r3.valid) ok('validation rejects invalid day keys');
+  else fail('intake validation', 'expected invalid day key error');
+}
+
+// Calendar consistency: training_plan_week.json sessions subset of workout_calendar
+function testCalendarConsistency() {
+  console.log('\n## Calendar Consistency');
+  const calPath = path.join(COACH_ROOT, 'workout_calendar.json');
+  const weekPath = path.join(WORKSPACE, 'current', 'training_plan_week.json');
+  if (!fs.existsSync(calPath) || !fs.existsSync(weekPath)) {
+    ok('skip consistency (no calendar/week yet)');
+    return;
+  }
+  const cal = loadJson(calPath);
+  const week = loadJson(weekPath);
+  const calIds = new Set((cal?.plan?.sessions || []).map((s) => s.id));
+  const weekIds = (week?.sessions || []).map((s) => s.id);
+  const allInCal = weekIds.every((id) => calIds.has(id));
+  if (allInCal) ok('training_plan_week sessions subset of workout_calendar');
+  else fail('calendar consistency', 'week has sessions not in calendar');
+}
+
+// No marathon-only centering: plan supports multiple goal types
+function testNoMarathonCentering() {
+  console.log('\n## Multi-Goal Support');
+  const planPath = path.join(COACH_ROOT, 'workout_calendar.json');
+  if (!fs.existsSync(planPath)) {
+    ok('skip multi-goal (no plan yet)');
+    return;
+  }
+  const cal = loadJson(planPath);
+  const sessions = cal?.plan?.sessions || [];
+  const hasStrength = sessions.some((s) => s.kind === 'Strength');
+  const hasEndurance = sessions.some((s) => ['LR', 'Tempo', 'Z2'].includes(s.kind));
+  if (sessions.length > 0 && (hasStrength || hasEndurance)) ok('plan includes strength or endurance');
+  else if (sessions.length === 0) ok('skip multi-goal (empty plan)');
+  else fail('multi-goal', 'plan should have Strength or endurance sessions');
 }
 
 function main() {
@@ -132,7 +185,10 @@ function main() {
   testTimezone();
   testGuardrails();
   testMatching();
-  testIntakeV2();
+  testIntakeV3();
+  testIntakeValidation();
+  testCalendarConsistency();
+  testNoMarathonCentering();
   console.log('\n---');
   console.log('Passed:', passed, 'Failed:', failed);
   process.exit(failed > 0 ? 1 : 0);

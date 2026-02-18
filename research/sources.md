@@ -131,3 +131,40 @@ Stable source IDs for citation. Each entry: ID, URL, short annotation.
 
 - **URL:** https://ncbi.nlm.nih.gov/pmc/articles/PMC10354314/
 - **Annotation:** Sleep hygiene, napping, sleep extension improve performance. SWS critical for physical recovery.
+
+---
+
+## Strength Splits
+
+## SRC023 — Ramos-Campo et al. (2024) — Split vs Full-Body meta-analysis
+
+- **URL:** https://pubmed.ncbi.nlm.nih.gov/38595233/
+- **Annotation:** Systematic review and meta-analysis. No significant difference in strength or hypertrophy between split and full-body routines when volume equated. Individuals can choose based on preference.
+
+---
+
+## Triathlon
+
+## SRC025 — Triathlon training plans (Triathlete, TrainingPeaks)
+
+- **URL:** https://www.triathlete.com/training/
+- **Annotation:** Olympic 16 weeks (2 swim, 2 bike, 2 run); 70.3 12–20 weeks (3 each); Ironman 20–24 weeks. Brick workouts in build/peak.
+
+---
+
+## Fixed Appointments / Team Sports
+
+## SRC026 — Volleyball season lengths (Ace Volleyball, Playing Volleyball)
+
+- **URL:** https://acevolleyball.org/navigating-the-volleyball-seasons-a-comprehensive-guide/
+- **Annotation:** Indoor: 2–5 months (school), 6–9 months (club). Beach: year-round. Typical competition weeks.
+
+## SRC027 — Lower-volume training team sports (2024)
+
+- **URL:** https://sportsmedicine-open.springeropen.com/articles/10.1186/s40798-024-00808-3
+- **Annotation:** Meta-analysis: lower-volume resistance and aerobic training can achieve similar fitness gains in team sport athletes when managing fixed commitments.
+
+## SRC028 — Volleyball periodization (Marques Junior)
+
+- **URL:** https://medcraveonline.com/MOJSM/MOJSM-02-00056.pdf
+- **Annotation:** Specific periodization for volleyball; technical and game-situation training; load monitoring; integration with match schedule.

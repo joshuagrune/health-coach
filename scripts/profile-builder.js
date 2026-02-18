@@ -126,8 +126,18 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
   const weightKg = vitalsRecent.length ? vitalsRecent.filter((v) => v.weight_kg != null).slice(-1)[0]?.weight_kg : null;
   const restingHR = vitalsRecent.length ? vitalsRecent.filter((v) => v.resting_heart_rate != null).slice(-1)[0]?.resting_heart_rate : null;
 
+  const hasEnoughWorkouts = workoutsRecent.length >= 4;
+  const hasEnoughSleep = sleepTotals.length >= 7;
+  const confidence = {
+    endurance: hasEnoughWorkouts && runCount > 0 ? 'high' : runCount > 0 ? 'moderate' : 'low',
+    strength: hasEnoughWorkouts && strengthCount > 0 ? 'high' : strengthCount > 0 ? 'moderate' : 'low',
+    sleep: hasEnoughSleep ? 'high' : sleepTotals.length > 0 ? 'moderate' : 'low',
+    overall: hasEnoughWorkouts || hasEnoughSleep ? 'moderate' : 'low',
+  };
+
   return {
     dataQuality: 'salvor',
+    confidence,
     version: 2,
     generatedAt: now.toISOString(),
     timeZone: TZ,
@@ -191,6 +201,7 @@ function buildProfileFromIntake(intake) {
   const now = new Date();
   return {
     dataQuality: 'manual',
+    confidence: { endurance: 'low', strength: 'low', sleep: 'low', overall: 'low' },
     version: 2,
     generatedAt: now.toISOString(),
     timeZone: TZ,
@@ -245,6 +256,7 @@ function main() {
     profile = buildProfileFromIntake(intake);
   } else {
     profile = buildProfileFromIntake({ baseline: {} });
+    profile.confidence = profile.confidence || { endurance: 'low', strength: 'low', sleep: 'low', overall: 'low' };
   }
 
   fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2), 'utf8');
@@ -252,6 +264,7 @@ function main() {
   const summary = {
     updatedAt: profile.generatedAt,
     dataQuality: profile.dataQuality,
+    confidence: profile.confidence,
     sleep: profile.sleep.avgTotalMinutes ? `${Math.floor(profile.sleep.avgTotalMinutes / 60)}h ${profile.sleep.avgTotalMinutes % 60}min avg` : null,
     workoutsPerWeek: profile.workouts.workoutsPerWeek,
     readiness: profile.scores.lastReadiness,

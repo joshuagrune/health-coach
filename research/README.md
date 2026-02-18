@@ -25,6 +25,11 @@ This folder documents the scientific background for the Health Coach planning ru
 | `load_management_and_injury_risk.md` | Monotony, strain, ACWR, ramp rate |
 | `adaptive_rules_missed_workouts.md` | Missed-workout handling |
 | `strength_training_evidence.md` | Strength: frequency, volume, deload, progression |
+| `strength_splits_evidence.md` | Strength splits: full-body, PPL, upper/lower, bro-split, upper-body only |
+| `running_plans_evidence.md` | Running: marathon, half, 10k, 5k plan structure |
+| `cycling_plans_evidence.md` | Cycling: Base → Build → Peak periodization |
+| `triathlon_plans_evidence.md` | Triathlon: sprint, Olympic, 70.3, Ironman; swim/bike/run distribution |
+| `fixed_appointments_evidence.md` | Fixed appointments: team sports, volleyball, season length |
 | `endurance_zone_hiit_evidence.md` | Zone 2, polarized, HIIT frequency and recovery |
 | `flexibility_mobility_evidence.md` | Stretching, ROM, foam rolling |
 | `sleep_recovery_evidence.md` | Sleep hygiene, napping, SWS, recovery |

@@ -3,9 +3,11 @@
  * Long-term Salvor sync for Health Coach.
  * Fetches workouts, sleep, activity, vitals, scores; normalizes to UTC + localDate (Europe/Berlin);
  * appends to monthly JSONL files in workspace/health/coach/salvor_cache/.
+ * Idempotent: deduplicates by record ID before append.
  *
  * Requires: SALVOR_API_KEY (injected by OpenClaw or from .env fallback).
  * State: workspace/health/coach/salvor_sync_state.json
+ * Env: SALVOR_BOOTSTRAP_DAYS (default 365), SALVOR_INCREMENTAL_DAYS (default 7)
  */
 
 const { execSync } = require('child_process');
@@ -397,4 +399,12 @@ function main() {
   console.log(`Salvor sync done. Range: ${startDate}–${endDate}. New records: ${totalAdded}. Workouts: ${workouts.length}, Sleep: ${sleep.length}, Activity: ${activity.length}, Vitals: ${vitals.length}, Scores: ${scores.length}.`);
 }
 
-main();
+try {
+  main();
+} catch (err) {
+  console.error('Salvor sync failed:', err.message);
+  if (!process.env.SALVOR_API_KEY) {
+    console.error('Hint: Set SALVOR_API_KEY in env or workspace .env');
+  }
+  process.exit(1);
+}

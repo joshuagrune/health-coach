@@ -14,6 +14,8 @@ Assessment-first health and fitness coach. Builds a profile from Salvor data (op
 - "Create a training plan"
 - "Workout scheduling"
 - "Missed workout adaptation"
+- "Workout analysis" / "Compare my runs" / "Compare run metrics"
+- "Volume trend" / "Training volume over time" / "Pace at heart rate" / "Sleep trend"
 - "Health Coach Onboarding" / "Goal capture"
 
 ## Prerequisites
@@ -31,28 +33,27 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
 - **Coach root**: `workspace/health/coach/`
 - **Salvor cache**: `workspace/health/coach/salvor_cache/` (workouts, sleep, vitals, activity, scores)
 - **Derived**: `intake.json`, `profile.json`, `workout_calendar.json`, `adaptation_log.jsonl`
-- **Rolling summaries**: `workspace/current/health_profile_summary.json`, `workspace/current/training_plan_week.json`
+- **Rolling summaries**: `workspace/current/health_profile_summary.json`, `workspace/current/training_plan_week.json`, `workspace/current/health_weekly_summary.json`
 
 ## Assessment-First Flow (MANDATORY)
 
 **Before asking any baseline or goal questions**, auto-detect state:
 
-1. Check: `workspace/health/coach/intake.json`, `profile.json`, `workout_calendar.json`, `salvor_cache/`, `workspace/current/health_profile_summary.json`
-2. If profile exists and is recent (<24h) and salvor_cache has data → summarize current state and ask what the user wants to do next.
-3. If coach/ is empty or profile missing/stale → **ask first**:
+1. **Detect state**: Check `workspace/health/coach/intake.json`, `profile.json`, `workout_calendar.json`, `salvor_cache/`, `workspace/current/health_profile_summary.json`, `workspace/current/training_plan_week.json`.
+2. **If profile exists and is recent (<24h)** and salvor_cache has data → summarize current state and ask what the user wants to do next.
+3. **If coach/ is empty or profile missing/stale** → **First question (always)**:
    - "Should I sync and analyze your health data first (recommended) to evaluate your current fitness and health status? If yes, I'll run Salvor sync and build your profile. If no or you don't use Salvor, I'll ask you a few questions to estimate your baseline."
-4. **If user says yes**:
-   - **If SALVOR_API_KEY is set**:
-      - continue
-   - **If SALVOR_API_KEY is not set**:
-     - Prompt the user to provide their Salvor API key to enable automatic sync and a data-driven profile, or proceed with manual intake if they prefer.
-   - Run `salvor-sync.js` (bootstrap 365d)
+4. **If user says yes and SALVOR_API_KEY is set**:
+   - Run `salvor-sync.js` (bootstrap 365d, configurable via SALVOR_BOOTSTRAP_DAYS)
    - Run `profile-builder.js`
-   - Summarize profile (sleep, workouts, readiness, vitals) and then ask about goals.
-5. **If user says no** or SALVOR_API_KEY is not set:
+   - Summarize profile (sleep, workouts, readiness, vitals, dataQuality) and then ask about goals.
+5. **If user says yes but SALVOR_API_KEY is not set**:
+   - Prompt: "To sync Salvor data, I need your Salvor API key. You can add it as SALVOR_API_KEY, or we can proceed with manual intake instead."
+   - If user provides key → run sync + profile. If user declines → go to step 6.
+6. **If user says no or prefers manual** (Salvor optional):
    - Run manual intake Q&A (constraints, baseline, goals)
    - Write `intake.json` via `intake-writer.js`
-   - Run `profile-builder.js` (builds manual profile from intake)
+   - Run `profile-builder.js` (builds manual profile from intake; dataQuality: "manual")
    - Then ask about planning goals.
 
 
@@ -62,9 +63,9 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
 
 Follow Assessment-First Flow above. Then, if intake is missing:
 
-- **Goals**: Endurance (marathon, half, 10k), strength, bodycomp, sleep, general fitness — ask what matters to the user
-- **Constraints**: Days available, max time/day, travel, gym access, other sports, rest days
-- **Baseline**: Training frequency, longest recent run/session, injury history, perceived fitness (running + strength)
+- **Goals**: Endurance (marathon, half, 10k, 5k, cycling, triathlon sprint/olympic/70.3/ironman), strength, bodycomp, sleep, general fitness — ask what matters to the user
+- **Constraints** (required): **daysAvailable** — which days can you train? (mo, tu, wed, th, fr, sa, sun). **preferredRestDays** — which days do you prefer off? (e.g. wed, sun). **maxSessionsPerWeek** (optional) — cap sessions even if more days available (e.g. "I want 3x/week"). **fixedAppointments** (optional) — e.g. volleyball on Wed 18:00, frequency, season window. Also: max time/day, gym access, other sports.
+- **Baseline**: Training frequency, longest recent run/session, injury history, perceived fitness (running + strength), strengthSplitPreference (full_body, upper_lower, push_pull_legs, bro_split), trainingHistoryByModality (optional)
 - **Intensity calibration**: Race times or threshold; fallback RPE zones
 - **Preferences**: Plan style, language, notification cadence
 - **Safety gates**: Pain/illness rules
@@ -75,6 +76,14 @@ Write `intake.json` via `intake-writer.js` **with goals included**. Never write 
 - Bodycomp: `{ id, kind: "bodycomp", priority: "moderate" }`
 - Also set `milestones: [{ id, kind: "marathon", dateLocal, priority, targetTimeSeconds? }]` for endurance events.
 
+**Parsing user input to JSON:**
+- "every day" / "Mon–Sun" → daysAvailable: ["mo","tu","we","th","fr","sa","su"]
+- "Friday Sunday rest" → preferredRestDays: ["fr","su"]; daysAvailable = all except those
+- Day keys: mo, tu, we, th, fr, sa, su
+- "3x per week" / "I want 3 sessions per week" → maxSessionsPerWeek: 3
+
+**Never use defaults** for daysAvailable or preferredRestDays — if empty, plan-generator and intake-writer fail with clear errors. Always ask the user.
+
 Then trigger profile + plan generation.
 
 ### 2. Profile & Plan Generation
@@ -83,13 +92,28 @@ Then trigger profile + plan generation.
 - If no Salvor: Run `profile-builder.js` (builds manual profile from intake)
 - **Before plan-generator**: Ensure `intake.json` has non-empty `goals` (and `milestones` for endurance). If empty but user stated goals, re-write intake with goals or run `intake-from-goals.js` (when `health/goals.md` exists).
 - Generate plan: `node {baseDir}/scripts/plan-generator.js` (goal-driven: endurance, strength, habits)
+- **When summarizing the plan** (e.g. from `training_plan_week.json`): Include ALL session kinds — LR, Z2, Tempo, **Strength**, etc. Never omit Strength sessions; they are part of the plan when user has strength/bodycomp goals or baseline.
 
-### 3. Adaptation (missed workouts, schedule changes)
+### 3. Status (illness, injury, travel)
 
+When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling next week", "Reise nächste Woche":
+
+- **Set status**: `node {baseDir}/scripts/status-writer.js --status illness --until YYYY-MM-DD [--note "Erkältung"]`
+- **Travel**: `node status-writer.js --status travel --since YYYY-MM-DD --until YYYY-MM-DD`
+- **Clear**: `node status-writer.js --clear` when user says "bin wieder fit", "recovered"
+- **Show**: `node status-writer.js --show`
+
+**Neck Rule** (light symptoms): If only above-neck (runny nose, light headache, sore throat) → Z2/light exercise may be OK. Below-neck (fever, body aches, chest) or fever → rest. Ask user for `--until` date; suggest 48h symptom-free for fever/flu.
+
+**Effect**: Sessions in status period are not published to calendar; adaptive-replanner marks them as "skipped" (not "missed"); `training_plan_week.json` includes `status` for agent to show banner.
+
+### 4. Adaptation (missed workouts, schedule changes)
+
+- Run `node {baseDir}/scripts/calendar-reconcile.js` first (if using calendar publish) — detects moved/deleted events
 - Run `node {baseDir}/scripts/adaptive-replanner.js`
-- Applies rules: never cram; LR swap/shorten; Tempo swap within 48–72h; Intervals drop first; Strength missed → safe swap; illness/travel → deload
+- Applies rules: never cram; LR swap/shorten; Tempo swap within 48–72h; Intervals drop first; Strength missed → safe swap; Z2/Cycling/Triathlon missed → swap or skip; illness/travel → deload
 
-### 4. Calendar Publishing (optional)
+### 5. Calendar Publishing (optional)
 
 - Dry-run: `node {baseDir}/scripts/calendar-publish.js --dry-run`
 - Publish: `node {baseDir}/scripts/calendar-publish.js` (requires vdirsyncer sync first)
@@ -99,10 +123,32 @@ Then trigger profile + plan generation.
 | Script | Purpose |
 |--------|---------|
 | `salvor-sync.js` | Long-term Salvor sync (workouts, sleep, vitals, activity, scores); bootstrap 365d, incremental 7d |
+| `intake-validation.js` | Intake schema v3 validation (used by intake-writer, plan-generator) |
 | `profile-builder.js` | Compute `profile.json` from Salvor cache or intake baseline; write `health_profile_summary.json` |
-| `plan-generator.js` | Goal-driven: endurance, strength, habits; outputs `workout_calendar.json` |
-| `adaptive-replanner.js` | Reconcile actual vs planned; apply adaptation rules; append to `adaptation_log.jsonl` |
+| `plan-generator.js` | Multi-program: endurance, strength, habits; fixed appointments; global guardrails |
+| `adaptive-replanner.js` | Reconcile actual vs planned; all session types; append to `adaptation_log.jsonl` |
+| `calendar-reconcile.js` | Reconcile moved/deleted calendar events; reads vdirsyncer storage |
 | `calendar-publish.js` | Publish next 7–14 days to Sport calendar (dry-run supported) |
+| `status-writer.js` | Set/clear status (illness, injury, travel, deload); respects status in publish/replan |
+| `workout-analysis.js` | Compare metrics across workouts of same type (pace, HR, GCT, stride, power); `--type Running`, `--summary` |
+| `workout-volume-trend.js` | Volume per week/month; `--type Running`, `--period week|month`, `--summary` |
+| `pace-at-hr-trend.js` | Pace at HR zone (Z2) over time; `--hr-min`, `--hr-max`, `--summary` |
+| `sleep-trend.js` | Sleep: total, deep, REM, weekday vs weekend, consistency; `--summary` |
+| `weekly-summary.js` | Consolidates volume, sleep, readiness for quick overview; writes `health_weekly_summary.json`; `--text` |
+| `load-management.js` | Acute:Chronic Load Ratio (injury risk); `--type Running`, `--summary` |
+| `running-form-trend.js` | GCT, stride, vertical oscillation over time; `--summary` |
+| `vitals-trend.js` | RHR, HRV, weight, VO2max over time; `--summary` |
+
+## Proactive Check-ins
+
+When the user has an active plan and hasn't interacted recently, consider:
+
+- **3+ days no workouts**: "You haven't trained in the last few days — is that intentional or should I adjust the plan?"
+- **Load spike** (profile.flags.loadSpike): "Your training volume has increased significantly. Want to schedule a deload week?"
+- **Sleep deficit** (profile.flags.sleepDeficit): "Your sleep was below average recently. Should I reduce intensity this week?"
+- **Low readiness** (profile.flags.lowReadiness): "Readiness is low — light sessions or rest today?"
+
+Run `weekly-summary.js` or read `health_weekly_summary.json` for quick context before check-ins.
 
 ## Safety
 
@@ -113,3 +159,7 @@ Then trigger profile + plan generation.
 ## Research & Evidence
 
 Planning rules are traceable to `research/` in this skill folder. Each rule has `ruleId`, `sourceIds`, and limitations. See `research/README.md` and `research/sources.md`.
+
+## Troubleshooting
+
+See `TROUBLESHOOTING.md` for sync, profile, calendar, and script issues.

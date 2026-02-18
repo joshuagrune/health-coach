@@ -35,6 +35,8 @@ function loadJson(p) {
   }
 }
 
+const { isDateInStatusBlock } = require('./status-helper');
+
 function main() {
   const dryRun = process.argv.includes('--dry-run');
   const daysArg = process.argv.find((a) => a.startsWith('--days='));
@@ -56,6 +58,7 @@ function main() {
     if (s.localDate < today) return false;
     if (s.localDate > endStr) return false;
     if (s.calendar?.khalUid) return false; // already published
+    if (isDateInStatusBlock(s.localDate)) return false; // illness/travel: don't publish
     return true;
   });
 
@@ -96,6 +99,7 @@ function main() {
       // khal doesn't return UID easily; we'd need to search. For now we mark as published by not re-publishing.
       s.calendar = s.calendar || {};
       s.calendar.publishedAt = new Date().toISOString();
+      s.calendar.sessionIdTag = `health-coach:${s.id}`;
     } catch (e) {
       console.error('khal new failed for', s.title, ':', e.message);
     }

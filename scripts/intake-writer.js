@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { validateIntakeV3 } = require('./intake-validation');
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
@@ -55,17 +56,33 @@ function writeIntake(data) {
     }
   } catch (_) {}
 
-  // Preserve goals/milestones when incoming has empty and existing has non-empty
+  const constraints = { ...existing?.constraints, ...data.constraints };
+  if (constraints.daysAvailable && constraints.daysAvailable.length === 0 && existing?.constraints?.daysAvailable?.length) {
+    constraints.daysAvailable = existing.constraints.daysAvailable;
+  }
+  if (!Array.isArray(constraints.fixedAppointments)) constraints.fixedAppointments = constraints.fixedAppointments || [];
   const goals = (data.goals && data.goals.length > 0) ? data.goals : (existing?.goals?.length ? existing.goals : data.goals ?? []);
   const milestones = (data.milestones && data.milestones.length > 0) ? data.milestones : (existing?.milestones?.length ? existing.milestones : data.milestones ?? []);
 
+  const baseline = { ...existing?.baseline, ...data.baseline };
+  if (baseline.strengthSplitPreference == null && existing?.baseline?.strengthSplitPreference != null) {
+    baseline.strengthSplitPreference = existing.baseline.strengthSplitPreference;
+  }
+  if (!baseline.trainingHistoryByModality && typeof baseline.trainingHistoryByModality !== 'object') {
+    baseline.trainingHistoryByModality = baseline.trainingHistoryByModality || {};
+  }
+
   const payload = {
-    version: data.version ?? 2,
+    version: data.version ?? 3,
     updatedAt: new Date().toISOString(),
+    ...existing,
     ...data,
+    constraints,
     goals,
     milestones,
+    baseline,
   };
+  validateIntakeV3(payload, { exitOnError: true });
   fs.writeFileSync(INTAKE_FILE, JSON.stringify(payload, null, 2), 'utf8');
   console.log('Wrote', INTAKE_FILE);
 }

@@ -34,6 +34,14 @@ Evidence for strength-focused planning rules. Marathon/endurance rules remain in
 - **decision:** If strength session missed: swap to next available day if no back-to-back hard. Do not cram two heavy sessions adjacent.
 - **limitations:** Volume equated over week preferred; single-session swap acceptable.
 
+## RULE_CARDIO_SUPPORT
+
+- **evidenceType:** coach_heuristic
+- **confidence:** moderate
+- **sourceIds:** [SRC003]
+- **decision:** In strength-only or strength-primary plans: add 1–2 Z2 sessions/week for general cardio support. Improves recovery, base fitness.
+- **limitations:** Volume should not compromise strength recovery.
+
 ## RULE_NO_BACK_TO_BACK_HARD (Strength)
 
 - **evidenceType:** coach_heuristic

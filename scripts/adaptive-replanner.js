@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 /**
  * Reconciles planned sessions with actual Salvor workouts. Applies adaptation rules.
- * Writes to adaptation_log.jsonl and updates workout_calendar.json session statuses.
- * ruleRefs: RULE_NEVER_CRAM, RULE_LR_MISSED_SWAP_OR_SHORTEN, RULE_TEMPO_MISSED_SWAP, etc.
+ * Supports all session types: LR, Tempo, Intervals, Z2, Strength, Cycling, Swim, Bike, Brick.
+ * Missed/swap/drop rules per type. Writes to adaptation_log.jsonl and workout_calendar.json.
+ *
+ * Rules:
+ * - LR: missed → swap or shorten (RULE_LR_MISSED_SWAP_OR_SHORTEN)
+ * - Tempo: missed → swap within 48–72h (RULE_TEMPO_MISSED_SWAP)
+ * - Intervals: missed → drop (RULE_INTERVALS_MISSED_DROP)
+ * - Strength: missed → safe swap next slot (RULE_STRENGTH_MISSED_SWAP)
+ * - Z2: missed → skipped (low priority)
+ * - Cycling: missed → swap or skip (RULE_CYCLING_MISSED_SWAP)
+ * - Swim/Bike/Brick: missed → swap (RULE_TRIATHLON_MISSED_SWAP)
  */
 
 const fs = require('fs');
@@ -15,12 +24,25 @@ const CALENDAR_FILE = path.join(COACH_ROOT, 'workout_calendar.json');
 const ADAPTATION_LOG = path.join(COACH_ROOT, 'adaptation_log.jsonl');
 const TZ = 'Europe/Berlin';
 
-const TIME_WINDOW_MIN = 30; // ±30 min match
 const KIND_MAP = {
   'Long Run': 'LR', 'Long Run (MP segments)': 'LR', 'Zone 2': 'Z2', 'Tempo': 'Tempo', 'Marathon Pace': 'Tempo',
   'Intervals': 'Intervals', 'Full Body': 'Strength', 'Full Body A': 'Strength', 'Full Body B': 'Strength',
+  'Upper': 'Strength', 'Lower': 'Strength', 'Push': 'Strength', 'Pull': 'Strength', 'Legs': 'Strength',
   'Strength Training': 'Strength', 'Flexibility': 'Strength', 'Running': 'Z2', 'Walking': 'Z2',
-  'Climbing': 'Strength', 'Cycling': 'Z2', 'Mind and Body': 'Strength',
+  'Climbing': 'Strength', 'Cycling': 'Cycling', 'Mind and Body': 'Strength',
+  'Swim': 'Swim', 'Swimming': 'Swim', 'Bike': 'Bike', 'Brick': 'Brick',
+};
+
+const MISSED_RULES = {
+  LR: { status: 'missed', ruleRefs: ['RULE_LR_MISSED_SWAP_OR_SHORTEN'], evidenceRefs: ['SRC003'] },
+  Tempo: { status: 'missed', ruleRefs: ['RULE_TEMPO_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
+  Intervals: { status: 'missed', ruleRefs: ['RULE_INTERVALS_MISSED_DROP'], evidenceRefs: ['SRC003'] },
+  Strength: { status: 'missed', ruleRefs: ['RULE_STRENGTH_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
+  Z2: { status: 'skipped', ruleRefs: ['RULE_Z2_MISSED_SKIP'], evidenceRefs: ['SRC003'] },
+  Cycling: { status: 'missed', ruleRefs: ['RULE_CYCLING_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
+  Swim: { status: 'missed', ruleRefs: ['RULE_TRIATHLON_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
+  Bike: { status: 'missed', ruleRefs: ['RULE_TRIATHLON_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
+  Brick: { status: 'missed', ruleRefs: ['RULE_TRIATHLON_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
 };
 
 function loadJson(p) {
@@ -30,6 +52,8 @@ function loadJson(p) {
     return null;
   }
 }
+
+const { isDateInStatusBlock } = require('./status-helper');
 
 function loadJsonlFiles(prefix) {
   const out = [];
@@ -56,13 +80,18 @@ function normalizeTitle(t) {
 
 function kindMatch(plannedKind, workoutType) {
   const p = (KIND_MAP[plannedKind] || plannedKind || '').toLowerCase();
+  const wt = (workoutType || '').toLowerCase();
   const w = (KIND_MAP[workoutType] || workoutType || '').toLowerCase();
   if (p === w) return true;
-  if (p === 'lr' && /run|zone|walking/i.test(workoutType)) return true;
-  if (p === 'z2' && /run|zone|walking|cycling/i.test(workoutType)) return true;
-  if (p === 'strength' && /strength|full body|flexibility|climbing|gym|hypertrophy|mind and body/i.test(workoutType)) return true;
-  if (p === 'tempo' && /run|interval/i.test(workoutType)) return true;
-  if (p === 'intervals' && /interval|run/i.test(workoutType)) return true;
+  if (p === 'lr' && /run|zone|walking/i.test(wt)) return true;
+  if (p === 'z2' && /run|zone|walking|cycling|cardio|jog/i.test(wt)) return true;
+  if (p === 'strength' && /strength|full body|upper|lower|push|pull|legs|flexibility|climbing|gym|hypertrophy|mind and body/i.test(wt)) return true;
+  if (p === 'tempo' && /run|interval|tempo/i.test(wt)) return true;
+  if (p === 'intervals' && /interval|run|hiit/i.test(wt)) return true;
+  if (p === 'cycling' && /cycling|bike|indoor cycling|outdoor cycling/i.test(wt)) return true;
+  if (p === 'swim' && /swim|swimming/i.test(wt)) return true;
+  if (p === 'bike' && /cycling|bike|indoor cycling|outdoor cycling/i.test(wt)) return true;
+  if (p === 'brick' && /brick|bike.*run|run.*bike|multisport/i.test(wt)) return true;
   return false;
 }
 
@@ -118,22 +147,18 @@ function main() {
       changed++;
       events.push({ at: new Date().toISOString(), reason: 'matched', sessionId: s.id, actualWorkoutId: wid, evidenceRefs: ['SRC010'] });
     } else {
-      if (s.kind === 'LR' || s.kind === 'Tempo' || s.kind === 'Intervals') {
-        s.status = 'missed';
-        changed++;
-        const rule = s.kind === 'LR' ? 'RULE_LR_MISSED_SWAP_OR_SHORTEN' : s.kind === 'Tempo' ? 'RULE_TEMPO_MISSED_SWAP' : 'RULE_INTERVALS_MISSED_DROP';
-        events.push({ at: new Date().toISOString(), reason: `missed_${s.kind.toLowerCase()}`, sessionId: s.id, ruleRefs: [rule], evidenceRefs: ['SRC003'] });
-      } else if (s.kind === 'Strength') {
-        s.status = 'missed';
-        changed++;
-        events.push({ at: new Date().toISOString(), reason: 'missed_strength', sessionId: s.id, ruleRefs: ['RULE_STRENGTH_MISSED_SWAP'], evidenceRefs: ['SRC003'] });
-      } else if (s.kind === 'Z2') {
-        s.status = 'skipped';
-        changed++;
-      } else {
-        s.status = 'skipped';
-        changed++;
-      }
+      const kind = s.kind || KIND_MAP[s.title] || 'Z2';
+      const inStatusBlock = isDateInStatusBlock(s.localDate);
+      const rule = MISSED_RULES[kind] || MISSED_RULES.Z2;
+      s.status = inStatusBlock ? 'skipped' : rule.status;
+      changed++;
+      events.push({
+        at: new Date().toISOString(),
+        reason: inStatusBlock ? 'status_illness_or_travel' : `missed_${kind.toLowerCase()}`,
+        sessionId: s.id,
+        ruleRefs: inStatusBlock ? ['RULE_DISRUPTION_DELOAD'] : rule.ruleRefs,
+        evidenceRefs: rule.evidenceRefs,
+      });
     }
   }
 
@@ -153,11 +178,18 @@ function main() {
     const diff = (d - t) / (24 * 60 * 60 * 1000);
     return diff >= 0 && diff < 7;
   });
+  const { getStatus } = require('./status-helper');
+  const currentStatus = getStatus();
   const currentDir = path.join(WORKSPACE, 'current');
   if (fs.existsSync(currentDir)) {
     fs.writeFileSync(
       path.join(currentDir, 'training_plan_week.json'),
-      JSON.stringify({ updatedAt: new Date().toISOString(), weekStart: today, sessions: nextWeekSessions }, null, 2),
+      JSON.stringify({
+        updatedAt: new Date().toISOString(),
+        weekStart: today,
+        sessions: nextWeekSessions,
+        status: currentStatus ? { status: currentStatus.status, until: currentStatus.until, note: currentStatus.note } : null,
+      }, null, 2),
       'utf8'
     );
   }

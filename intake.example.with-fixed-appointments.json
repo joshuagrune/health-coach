@@ -1,0 +1,56 @@
+{
+  "version": 3,
+  "updatedAt": "2026-02-18T00:00:00.000Z",
+  "goals": [
+    {
+      "id": "half_2026",
+      "kind": "endurance",
+      "subKind": "half",
+      "dateLocal": "2026-05-15",
+      "priority": "finish"
+    },
+    {
+      "id": "strength_1",
+      "kind": "strength",
+      "priority": "moderate"
+    }
+  ],
+  "milestones": [],
+  "constraints": {
+    "daysAvailable": ["mo", "tu", "wed", "th", "fr", "sa"],
+    "preferredRestDays": ["sun"],
+    "maxMinutesPerDay": 90,
+    "maxSessionsPerWeek": 5,
+    "gymAccess": true,
+    "otherSports": [],
+    "fixedAppointments": [
+      {
+        "id": "volleyball_1",
+        "name": "Volleyball",
+        "dayOfWeek": "wed",
+        "startTime": "18:00",
+        "durationMinutes": 90,
+        "frequency": "weekly",
+        "seasonStart": "2026-03-01",
+        "seasonEnd": "2026-10-31"
+      }
+    ]
+  },
+  "baseline": {
+    "runningFrequencyPerWeek": 3,
+    "longestRecentRunMinutes": 75,
+    "strengthFrequencyPerWeek": 2,
+    "longestStrengthSessionMinutes": 60,
+    "strengthSplitPreference": "upper_lower",
+    "injuryHistory": [],
+    "perceivedFitness": "moderate",
+    "perceivedStrength": "moderate",
+    "trainingHistoryByModality": {
+      "running": { "sessionsLast4Weeks": 12, "totalMinutesLast4Weeks": 360 },
+      "strength": { "sessionsLast4Weeks": 8, "totalMinutesLast4Weeks": 320 }
+    }
+  },
+  "intensityCalibration": {},
+  "preferences": { "planStyle": "minimal", "language": "en", "notificationCadence": "weekly" },
+  "safetyGates": {}
+}
