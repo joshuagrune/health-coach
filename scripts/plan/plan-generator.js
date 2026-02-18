@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { validateIntakeV3 } = require('./intake-validation');
+const { validateIntakeV3 } = require('../lib/intake-validation');
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
@@ -559,7 +559,7 @@ function main() {
     const diff = (d - t) / (24 * 60 * 60 * 1000);
     return diff >= 0 && diff < 7;
   });
-  const { getStatus } = require('./status-helper');
+  const { getStatus } = require('../lib/status-helper');
   const currentStatus = getStatus();
   ensureDir(path.join(WORKSPACE, 'current'));
   fs.writeFileSync(

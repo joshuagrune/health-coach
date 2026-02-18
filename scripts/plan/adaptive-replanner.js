@@ -53,7 +53,7 @@ function loadJson(p) {
   }
 }
 
-const { isDateInStatusBlock } = require('./status-helper');
+const { isDateInStatusBlock } = require('../lib/status-helper');
 
 function loadJsonlFiles(prefix) {
   const out = [];
@@ -178,7 +178,7 @@ function main() {
     const diff = (d - t) / (24 * 60 * 60 * 1000);
     return diff >= 0 && diff < 7;
   });
-  const { getStatus } = require('./status-helper');
+  const { getStatus } = require('../lib/status-helper');
   const currentStatus = getStatus();
   const currentDir = path.join(WORKSPACE, 'current');
   if (fs.existsSync(currentDir)) {

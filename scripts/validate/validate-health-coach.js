@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Validation suite for Health Coach: timezone, matching, guardrails, intake v3.
- * Run: node scripts/validate-health-coach.js
+ * Run: node scripts/validate/validate-health-coach.js
  */
 
 const fs = require('fs');
@@ -133,7 +133,7 @@ function testIntakeV3() {
 // Intake validation module: required fields, day keys
 function testIntakeValidation() {
   console.log('\n## Intake Validation Module');
-  const { validateIntakeV3 } = require('./intake-validation');
+  const { validateIntakeV3 } = require('../lib/intake-validation');
   const r1 = validateIntakeV3({ constraints: { daysAvailable: [] } });
   if (!r1.valid && r1.errors.some((e) => e.includes('daysAvailable'))) ok('validation rejects empty daysAvailable');
   else fail('intake validation', 'expected daysAvailable error');

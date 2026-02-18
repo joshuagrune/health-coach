@@ -17,10 +17,10 @@ Scripts live in **`{skill}/scripts/`** (e.g. `~/.openclaw/skills/health-coach/sc
 ```bash
 # From workspace (OPENCLAW_WORKSPACE defaults to ~/.openclaw/workspace)
 cd ~/.openclaw/workspace
-node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js
+node ~/.openclaw/skills/health-coach/scripts/sync/salvor-sync.js
 
 # Or with explicit workspace
-OPENCLAW_WORKSPACE=/path/to/workspace node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js
+OPENCLAW_WORKSPACE=/path/to/workspace node ~/.openclaw/skills/health-coach/scripts/sync/salvor-sync.js
 ```
 
 ## Config
@@ -52,10 +52,10 @@ On first use, the agent asks: "Should I sync and analyze your health data first 
 ## First Run
 
 1. (Optional) Set `SALVOR_API_KEY` in config or env for data-driven profile.
-2. Run `node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js` (bootstrap 365d) — only if using Salvor.
-3. Run `node ~/.openclaw/skills/health-coach/scripts/intake-from-goals.js` (or complete onboarding).
-4. Run `node ~/.openclaw/skills/health-coach/scripts/profile-builder.js`.
-5. Run `node ~/.openclaw/skills/health-coach/scripts/plan-generator.js`.
+2. Run `node ~/.openclaw/skills/health-coach/scripts/sync/salvor-sync.js` (bootstrap 365d) — only if using Salvor.
+3. Run `node ~/.openclaw/skills/health-coach/scripts/intake/intake-from-goals.js` (or complete onboarding).
+4. Run `node ~/.openclaw/skills/health-coach/scripts/plan/profile-builder.js`.
+5. Run `node ~/.openclaw/skills/health-coach/scripts/plan/plan-generator.js`.
 
 ## Analysis Scripts (`scripts/analysis/`)
 
@@ -81,8 +81,8 @@ node ~/.openclaw/skills/health-coach/scripts/analysis/vitals-trend.js [--days 36
 
 ## Reconcile (optional)
 
-- **adaptive-replanner.js**: Match Salvor workouts to planned sessions; mark completed/missed/skipped.
-- **calendar-reconcile.js**: After `vdirsyncer sync`, detect moved/deleted calendar events; update plan. Run before adaptive-replanner if using calendar publish.
+- **plan/adaptive-replanner.js**: Match Salvor workouts to planned sessions; mark completed/missed/skipped.
+- **calendar/calendar-reconcile.js**: After `vdirsyncer sync`, detect moved/deleted calendar events; update plan. Run before adaptive-replanner if using calendar publish.
 
 ## Cron Jobs (recommended)
 
@@ -96,25 +96,25 @@ crontab -e
 **Daily** (e.g. 07:30 — adjust to your wake-up + 30 min) — sync Salvor data, rebuild profile, weekly summary:
 
 ```
-30 7 * * * SALVOR_API_KEY=your_key OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/salvor-sync.js && node ~/.openclaw/skills/health-coach/scripts/profile-builder.js && node ~/.openclaw/skills/health-coach/scripts/analysis/weekly-summary.js
+30 7 * * * SALVOR_API_KEY=your_key OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/sync/salvor-sync.js && node ~/.openclaw/skills/health-coach/scripts/plan/profile-builder.js && node ~/.openclaw/skills/health-coach/scripts/analysis/weekly-summary.js
 ```
 
 **Daily** (e.g. 07:45 — 15 min after sync) — reconcile planned vs actual:
 
 ```
-45 7 * * * OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/adaptive-replanner.js
+45 7 * * * OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/plan/adaptive-replanner.js
 ```
 
 **Weekly** (e.g. Sunday 18:00) — regenerate plan (optional; plan changes only when intake/goals change):
 
 ```
-0 18 * * 0 OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/plan-generator.js
+0 18 * * 0 OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/plan/plan-generator.js
 ```
 
 **If using calendar publish** — run `vdirsyncer sync` before adaptive-replanner:
 
 ```
-45 7 * * * vdirsyncer sync && OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/calendar-reconcile.js && node ~/.openclaw/skills/health-coach/scripts/adaptive-replanner.js
+45 7 * * * vdirsyncer sync && OPENCLAW_WORKSPACE=~/.openclaw/workspace node ~/.openclaw/skills/health-coach/scripts/calendar/calendar-reconcile.js && node ~/.openclaw/skills/health-coach/scripts/plan/adaptive-replanner.js
 ```
 
 Replace `~/.openclaw/workspace` with your actual workspace path. Adjust the hour (e.g. `30 8` for 08:30) to match your wake-up. Use `SALVOR_API_KEY` from env or a secrets file; avoid hardcoding in crontab.

@@ -8,7 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { validateIntakeV3 } = require('./intake-validation');
+const { validateIntakeV3 } = require('../lib/intake-validation');
 
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');

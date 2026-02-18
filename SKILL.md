@@ -44,16 +44,16 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
 3. **If coach/ is empty or profile missing/stale** → **First question (always)**:
    - "Should I sync and analyze your health data first (recommended) to evaluate your current fitness and health status? If yes, I'll run Salvor sync and build your profile. If no or you don't use Salvor, I'll ask you a few questions to estimate your baseline."
 4. **If user says yes and SALVOR_API_KEY is set**:
-   - Run `salvor-sync.js` (bootstrap 365d, configurable via SALVOR_BOOTSTRAP_DAYS)
-   - Run `profile-builder.js`
+   - Run `scripts/sync/salvor-sync.js` (bootstrap 365d, configurable via SALVOR_BOOTSTRAP_DAYS)
+   - Run `scripts/plan/profile-builder.js`
    - Summarize profile (sleep, workouts, readiness, vitals, dataQuality) and then ask about goals.
 5. **If user says yes but SALVOR_API_KEY is not set**:
    - Prompt: "To sync Salvor data, I need your Salvor API key. You can add it as SALVOR_API_KEY, or we can proceed with manual intake instead."
    - If user provides key → run sync + profile. If user declines → go to step 6.
 6. **If user says no or prefers manual** (Salvor optional):
    - Run manual intake Q&A (constraints, baseline, goals)
-   - Write `intake.json` via `intake-writer.js`
-   - Run `profile-builder.js` (builds manual profile from intake; dataQuality: "manual")
+   - Write `intake.json` via `scripts/intake/intake-writer.js`
+   - Run `scripts/plan/profile-builder.js` (builds manual profile from intake; dataQuality: "manual")
    - Then ask about planning goals.
 
 
@@ -70,7 +70,7 @@ Follow Assessment-First Flow above. Then, if intake is missing:
 - **Preferences**: Plan style, language, notification cadence
 - **Safety gates**: Pain/illness rules
 
-Write `intake.json` via `intake-writer.js` **with goals included**. Never write empty `goals: []` if the user stated goals. Format:
+Write `intake.json` via `scripts/intake/intake-writer.js` **with goals included**. Never write empty `goals: []` if the user stated goals. Format:
 - Endurance: `{ id, kind: "endurance", subKind: "marathon", dateLocal: "YYYY-MM-DD", priority: "target_time"|"finish", targetTimeSeconds?: 14400 }`
 - Strength: `{ id, kind: "strength", priority: "moderate" }`
 - Bodycomp: `{ id, kind: "bodycomp", priority: "moderate" }`
@@ -88,20 +88,20 @@ Then trigger profile + plan generation.
 
 ### 2. Profile & Plan Generation
 
-- If Salvor available: Run `salvor-sync.js` first (bootstrap 365d), then `profile-builder.js`
-- If no Salvor: Run `profile-builder.js` (builds manual profile from intake)
-- **Before plan-generator**: Ensure `intake.json` has non-empty `goals` (and `milestones` for endurance). If empty but user stated goals, re-write intake with goals or run `intake-from-goals.js` (when `health/goals.md` exists).
-- Generate plan: `node {baseDir}/scripts/plan-generator.js` (goal-driven: endurance, strength, habits)
+- If Salvor available: Run `scripts/sync/salvor-sync.js` first (bootstrap 365d), then `scripts/plan/profile-builder.js`
+- If no Salvor: Run `scripts/plan/profile-builder.js` (builds manual profile from intake)
+- **Before plan-generator**: Ensure `intake.json` has non-empty `goals` (and `milestones` for endurance). If empty but user stated goals, re-write intake with goals or run `scripts/intake/intake-from-goals.js` (when `health/goals.md` exists).
+- Generate plan: `node {baseDir}/scripts/plan/plan-generator.js` (goal-driven: endurance, strength, habits)
 - **When summarizing the plan** (e.g. from `training_plan_week.json`): Include ALL session kinds — LR, Z2, Tempo, **Strength**, etc. Never omit Strength sessions; they are part of the plan when user has strength/bodycomp goals or baseline.
 
 ### 3. Status (illness, injury, travel)
 
 When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling next week", "Reise nächste Woche":
 
-- **Set status**: `node {baseDir}/scripts/status-writer.js --status illness --until YYYY-MM-DD [--note "Erkältung"]`
-- **Travel**: `node status-writer.js --status travel --since YYYY-MM-DD --until YYYY-MM-DD`
-- **Clear**: `node status-writer.js --clear` when user says "bin wieder fit", "recovered"
-- **Show**: `node status-writer.js --show`
+- **Set status**: `node {baseDir}/scripts/status/status-writer.js --status illness --until YYYY-MM-DD [--note "Erkältung"]`
+- **Travel**: `node scripts/status/status-writer.js --status travel --since YYYY-MM-DD --until YYYY-MM-DD`
+- **Clear**: `node scripts/status/status-writer.js --clear` when user says "bin wieder fit", "recovered"
+- **Show**: `node scripts/status/status-writer.js --show`
 
 **Neck Rule** (light symptoms): If only above-neck (runny nose, light headache, sore throat) → Z2/light exercise may be OK. Below-neck (fever, body aches, chest) or fever → rest. Ask user for `--until` date; suggest 48h symptom-free for fever/flu.
 
@@ -109,28 +109,53 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 
 ### 4. Adaptation (missed workouts, schedule changes)
 
-- Run `node {baseDir}/scripts/calendar-reconcile.js` first (if using calendar publish) — detects moved/deleted events
-- Run `node {baseDir}/scripts/adaptive-replanner.js`
+- Run `node {baseDir}/scripts/calendar/calendar-reconcile.js` first (if using calendar publish) — detects moved/deleted events
+- Run `node {baseDir}/scripts/plan/adaptive-replanner.js`
 - Applies rules: never cram; LR swap/shorten; Tempo swap within 48–72h; Intervals drop first; Strength missed → safe swap; Z2/Cycling/Triathlon missed → swap or skip; illness/travel → deload
 
 ### 5. Calendar Publishing (optional)
 
-- Dry-run: `node {baseDir}/scripts/calendar-publish.js --dry-run`
-- Publish: `node {baseDir}/scripts/calendar-publish.js` (requires vdirsyncer sync first)
+- Dry-run: `node {baseDir}/scripts/calendar/calendar-publish.js --dry-run`
+- Publish: `node {baseDir}/scripts/calendar/calendar-publish.js` (requires vdirsyncer sync first)
 
 ## Scripts (in `{baseDir}/scripts/`)
 
-**Core** (root):
+**sync/**:
 | Script | Purpose |
 |--------|---------|
 | `salvor-sync.js` | Long-term Salvor sync (workouts, sleep, vitals, activity, scores); bootstrap 365d, incremental 7d |
-| `intake-validation.js` | Intake schema v3 validation (used by intake-writer, plan-generator) |
-| `profile-builder.js` | Compute `profile.json` from Salvor cache or intake baseline; write `health_profile_summary.json` |
+
+**intake/**:
+| Script | Purpose |
+|--------|---------|
+| `intake-from-goals.js` | Pre-fill intake from goals.md |
+| `intake-writer.js` | Write intake.json from JSON (validates v3) |
+
+**plan/**:
+| Script | Purpose |
+|--------|---------|
+| `profile-builder.js` | Compute `profile.json` from Salvor cache or intake; write `health_profile_summary.json` |
 | `plan-generator.js` | Multi-program: endurance, strength, habits; fixed appointments; global guardrails |
 | `adaptive-replanner.js` | Reconcile actual vs planned; all session types; append to `adaptation_log.jsonl` |
+
+**calendar/**:
+| Script | Purpose |
+|--------|---------|
 | `calendar-reconcile.js` | Reconcile moved/deleted calendar events; reads vdirsyncer storage |
 | `calendar-publish.js` | Publish next 7–14 days to Sport calendar (dry-run supported) |
+
+**status/**:
+| Script | Purpose |
+|--------|---------|
 | `status-writer.js` | Set/clear status (illness, injury, travel, deload); respects status in publish/replan |
+
+**lib/** (shared): `intake-validation.js`, `status-helper.js`
+
+**validate/**:
+| Script | Purpose |
+|--------|---------|
+| `validate-health-coach.js` | Validation suite |
+| `run-scenario-tests.js` | E2E scenario tests |
 
 **Analysis** (`scripts/analysis/`):
 | Script | Purpose |

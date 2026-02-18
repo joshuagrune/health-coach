@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const SKILL_DIR = path.join(__dirname, '..');
+const SKILL_DIR = path.join(__dirname, '..', '..');
 const TEMP_BASE = path.join(os.tmpdir(), 'health-coach-scenarios');
 
 function run(cmd, env = {}) {
@@ -95,7 +95,7 @@ for (const sc of scenarios) {
   const ws = setupWorkspace(sc.name);
   writeIntake(ws, sc.intake);
   try {
-    run(`node scripts/plan-generator.js`, { OPENCLAW_WORKSPACE: ws });
+    run(`node scripts/plan/plan-generator.js`, { OPENCLAW_WORKSPACE: ws });
     const cal = JSON.parse(fs.readFileSync(path.join(ws, 'health', 'coach', 'workout_calendar.json'), 'utf8'));
     const sessions = cal?.plan?.sessions || [];
     if (sessions.length > 0) {

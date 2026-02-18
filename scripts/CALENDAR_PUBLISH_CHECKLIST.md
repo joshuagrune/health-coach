@@ -4,7 +4,7 @@ Before publishing planned sessions to the Sport calendar:
 
 1. **vdirsyncer sync first** — Always run `vdirsyncer sync` before any calendar write. Never run `khal new` first and sync afterwards.
 
-2. **Dry-run** — Run `node health/scripts/calendar-publish.js --dry-run` to see what would be created. Verify dates and titles.
+2. **Dry-run** — Run `node scripts/calendar/calendar-publish.js --dry-run` to see what would be created. Verify dates and titles.
 
 3. **No duplicates** — Check that planned sessions don't overlap with existing calendar events for the same day. The sync script matches by title + time; avoid creating duplicates.
 

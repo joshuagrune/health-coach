@@ -35,7 +35,7 @@ function loadJson(p) {
   }
 }
 
-const { isDateInStatusBlock } = require('./status-helper');
+const { isDateInStatusBlock } = require('../lib/status-helper');
 
 function main() {
   const dryRun = process.argv.includes('--dry-run');
