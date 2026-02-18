@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "updatedAt": "2026-02-18T00:00:00.000Z",
+  "milestones": [
+    {
+      "id": "marathon_2026",
+      "kind": "marathon",
+      "dateLocal": "2026-06-15",
+      "priority": "finish",
+      "targetTimeSeconds": null
+    }
+  ],
+  "constraints": {
+    "daysAvailable": ["mo", "tu", "th", "fr", "sa"],
+    "maxMinutesPerDay": 90,
+    "gymAccess": true,
+    "otherSports": ["volleyball"],
+    "preferredRestDays": ["wed", "sun"]
+  },
+  "baseline": {
+    "runningFrequencyPerWeek": 2,
+    "longestRecentRunMinutes": 60,
+    "injuryHistory": [],
+    "perceivedFitness": "moderate"
+  },
+  "intensityCalibration": {
+    "recentRaceTimeSeconds": null,
+    "thresholdPaceSecondsPerKm": null,
+    "fallbackZones": "rpe"
+  },
+  "preferences": {
+    "planStyle": "minimal",
+    "language": "de",
+    "notificationCadence": "weekly"
+  },
+  "safetyGates": {
+    "painStopRule": "Stop and rest if pain > 4/10 or persists next day",
+    "illnessRule": "If fever or flu: no training until 48h symptom-free"
+  }
+}
