@@ -10,11 +10,11 @@ Assessment-first health and fitness coach. Builds a profile from Salvor data (op
 
 ## When to Use
 
-- "Wie sieht mein aktuelles Fitness-Profil aus?" / "Show my health profile"
-- "Erstelle mir einen Trainingsplan" / "Create a training plan"
-- "Workout-Kalender" / "Workout scheduling"
-- "Ich habe ein Workout verpasst" / "Missed workout adaptation"
-- "Health Coach Onboarding" / "Ziele erfassen"
+- "Show my health profile"
+- "Create a training plan"
+- "Workout scheduling"
+- "Missed workout adaptation"
+- "Health Coach Onboarding" / "Goal capture"
 
 ## Prerequisites
 
@@ -41,7 +41,11 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
 2. If profile exists and is recent (<24h) and salvor_cache has data → summarize current state and ask what the user wants to do next.
 3. If coach/ is empty or profile missing/stale → **ask first**:
    - "Should I sync and analyze your health data first (recommended) to evaluate your current fitness and health status? If yes, I'll run Salvor sync and build your profile. If no or you don't use Salvor, I'll ask you a few questions to estimate your baseline."
-4. **If user says yes** and SALVOR_API_KEY is set:
+4. **If user says yes**:
+   - **If SALVOR_API_KEY is set**:
+      - continue
+   - **If SALVOR_API_KEY is not set**:
+     - Prompt the user to provide their Salvor API key to enable automatic sync and a data-driven profile, or proceed with manual intake if they prefer.
    - Run `salvor-sync.js` (bootstrap 365d)
    - Run `profile-builder.js`
    - Summarize profile (sleep, workouts, readiness, vitals) and then ask about goals.
@@ -51,7 +55,6 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
    - Run `profile-builder.js` (builds manual profile from intake)
    - Then ask about planning goals.
 
-**Never** start with marathon-specific questions. Marathon is one optional goal among strength, bodycomp, sleep, and general fitness.
 
 ## Interaction Flows
 
@@ -66,12 +69,19 @@ Follow Assessment-First Flow above. Then, if intake is missing:
 - **Preferences**: Plan style, language, notification cadence
 - **Safety gates**: Pain/illness rules
 
-Write `intake.json` and trigger profile + plan generation.
+Write `intake.json` via `intake-writer.js` **with goals included**. Never write empty `goals: []` if the user stated goals. Format:
+- Endurance: `{ id, kind: "endurance", subKind: "marathon", dateLocal: "YYYY-MM-DD", priority: "target_time"|"finish", targetTimeSeconds?: 14400 }`
+- Strength: `{ id, kind: "strength", priority: "moderate" }`
+- Bodycomp: `{ id, kind: "bodycomp", priority: "moderate" }`
+- Also set `milestones: [{ id, kind: "marathon", dateLocal, priority, targetTimeSeconds? }]` for endurance events.
+
+Then trigger profile + plan generation.
 
 ### 2. Profile & Plan Generation
 
 - If Salvor available: Run `salvor-sync.js` first (bootstrap 365d), then `profile-builder.js`
 - If no Salvor: Run `profile-builder.js` (builds manual profile from intake)
+- **Before plan-generator**: Ensure `intake.json` has non-empty `goals` (and `milestones` for endurance). If empty but user stated goals, re-write intake with goals or run `intake-from-goals.js` (when `health/goals.md` exists).
 - Generate plan: `node {baseDir}/scripts/plan-generator.js` (goal-driven: endurance, strength, habits)
 
 ### 3. Adaptation (missed workouts, schedule changes)

@@ -48,10 +48,23 @@ function main() {
 
 function writeIntake(data) {
   ensureDir(COACH_ROOT);
+  let existing = null;
+  try {
+    if (fs.existsSync(INTAKE_FILE)) {
+      existing = JSON.parse(fs.readFileSync(INTAKE_FILE, 'utf8'));
+    }
+  } catch (_) {}
+
+  // Preserve goals/milestones when incoming has empty and existing has non-empty
+  const goals = (data.goals && data.goals.length > 0) ? data.goals : (existing?.goals?.length ? existing.goals : data.goals ?? []);
+  const milestones = (data.milestones && data.milestones.length > 0) ? data.milestones : (existing?.milestones?.length ? existing.milestones : data.milestones ?? []);
+
   const payload = {
     version: data.version ?? 2,
     updatedAt: new Date().toISOString(),
     ...data,
+    goals,
+    milestones,
   };
   fs.writeFileSync(INTAKE_FILE, JSON.stringify(payload, null, 2), 'utf8');
   console.log('Wrote', INTAKE_FILE);

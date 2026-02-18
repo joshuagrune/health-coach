@@ -54,7 +54,7 @@ function defaultIntake() {
       thresholdPaceSecondsPerKm: null,
       fallbackZones: 'rpe',
     },
-    preferences: { planStyle: 'minimal', language: 'de', notificationCadence: 'weekly' },
+    preferences: { planStyle: 'minimal', language: 'en', notificationCadence: 'weekly' },
     safetyGates: {
       painStopRule: 'Stop and rest if pain > 4/10 or persists next day',
       illnessRule: 'If fever or flu: no training until 48h symptom-free',
@@ -113,13 +113,31 @@ function parseGoals() {
 }
 
 function main() {
-  if (fs.existsSync(INTAKE_FILE)) {
-    console.log('intake.json already exists, skipping');
-    return;
-  }
-  const data = parseGoals();
   ensureDir(COACH_ROOT);
-  const payload = { version: 2, updatedAt: new Date().toISOString(), ...data };
+  let payload;
+  if (fs.existsSync(INTAKE_FILE)) {
+    const existing = JSON.parse(fs.readFileSync(INTAKE_FILE, 'utf8'));
+    const hasGoals = (existing.goals?.length ?? 0) > 0 || (existing.milestones?.length ?? 0) > 0;
+    if (hasGoals) {
+      console.log('intake.json already has goals, skipping');
+      return;
+    }
+    if (!fs.existsSync(GOALS_PATH)) {
+      console.log('intake.json exists, goals empty, no goals.md — skipping');
+      return;
+    }
+    const parsed = parseGoals();
+    payload = {
+      ...existing,
+      goals: parsed.goals,
+      milestones: parsed.milestones,
+      updatedAt: new Date().toISOString(),
+    };
+    console.log('Merged goals from goals.md into existing intake');
+  } else {
+    const data = parseGoals();
+    payload = { version: 2, updatedAt: new Date().toISOString(), ...data };
+  }
   fs.writeFileSync(INTAKE_FILE, JSON.stringify(payload, null, 2), 'utf8');
   console.log('Wrote', INTAKE_FILE);
 }
