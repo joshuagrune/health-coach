@@ -12,6 +12,7 @@ const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME |
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
 const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
 const INTAKE_FILE = path.join(COACH_ROOT, 'intake.json');
+const { computeFromProfile, getGoalsWithTargets } = require('../lib/goal-progress');
 const PROFILE_FILE = path.join(COACH_ROOT, 'profile.json');
 const SUMMARY_FILE = path.join(WORKSPACE, 'current', 'health_profile_summary.json');
 const TZ = 'Europe/Berlin';
@@ -125,6 +126,22 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
   const vitalsRecent = getRecent(vitals, 28);
   const weightKg = vitalsRecent.length ? vitalsRecent.filter((v) => v.weight_kg != null).slice(-1)[0]?.weight_kg : null;
   const restingHR = vitalsRecent.length ? vitalsRecent.filter((v) => v.resting_heart_rate != null).slice(-1)[0]?.resting_heart_rate : null;
+  const lastWithVo2 = vitalsRecent.filter((v) => (v.vo2_max ?? v.vo2Max) != null).slice(-1)[0];
+  const vo2max = lastWithVo2 ? (lastWithVo2.vo2_max ?? lastWithVo2.vo2Max) : null;
+  const lastWithHrv = vitalsRecent.filter((v) => (v.hrv ?? v.hrvMs) != null).slice(-1)[0];
+  const hrvMs = lastWithHrv ? (lastWithHrv.hrv ?? lastWithHrv.hrvMs) : null;
+
+  // Weight trend: last 2 weeks vs previous 2 weeks (for bodycomp progress)
+  const weightsWithDates = vitalsRecent.filter((v) => v.weight_kg != null).map((v) => ({ w: v.weight_kg, d: v.localDate || v.date }));
+  let weightTrendKg = null;
+  if (weightsWithDates.length >= 4) {
+    const mid = Math.floor(weightsWithDates.length / 2);
+    const recent = weightsWithDates.slice(mid);
+    const older = weightsWithDates.slice(0, mid);
+    const avgRecent = recent.reduce((a, x) => a + x.w, 0) / recent.length;
+    const avgOlder = older.reduce((a, x) => a + x.w, 0) / older.length;
+    weightTrendKg = Math.round((avgRecent - avgOlder) * 10) / 10;
+  }
 
   const hasEnoughWorkouts = workoutsRecent.length >= 4;
   const hasEnoughSleep = sleepTotals.length >= 7;
@@ -185,7 +202,7 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
       totalDurationMinutes: Math.round(totalDuration),
       longestRunMinutes: Math.round(longRunMinutes) || null,
     },
-    vitals: { weightKg, restingHeartRateBpm: restingHR },
+    vitals: { weightKg, restingHeartRateBpm: restingHR, weightTrendKg, vo2max, hrvMs },
     scores: {
       lastReadiness: lastScore?.readiness?.score ?? lastScore?.readiness ?? null,
       avgReadiness: avgReadiness ? Math.round(avgReadiness) : null,
@@ -232,7 +249,7 @@ function buildProfileFromIntake(intake) {
       totalDurationMinutes: 0,
       longestRunMinutes: baseline.longestRecentRunMinutes ?? 60,
     },
-    vitals: { weightKg: null, restingHeartRateBpm: null },
+    vitals: { weightKg: null, restingHeartRateBpm: null, weightTrendKg: null, vo2max: null, hrvMs: null },
     scores: { lastReadiness: null, avgReadiness: null, lastLoadRatio: null, dataQuality: null },
     flags: { sleepDeficit: false, lowReadiness: false, loadSpike: false },
   };
@@ -259,6 +276,10 @@ function main() {
     profile.confidence = profile.confidence || { endurance: 'low', strength: 'low', sleep: 'low', overall: 'low' };
   }
 
+  // Unified goal progress (bodycomp, sleep, vo2max, rhr, hrv) for agent feedback
+  const goalsWithTargets = getGoalsWithTargets(intake?.goals || []);
+  profile.goalProgress = goalsWithTargets.length > 0 ? computeFromProfile(intake.goals, profile) : [];
+
   fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2), 'utf8');
 
   const summary = {
@@ -269,6 +290,7 @@ function main() {
     workoutsPerWeek: profile.workouts.workoutsPerWeek,
     readiness: profile.scores.lastReadiness,
     flags: profile.flags,
+    goalProgress: profile.goalProgress || [],
   };
 
   fs.writeFileSync(SUMMARY_FILE, JSON.stringify(summary, null, 2), 'utf8');

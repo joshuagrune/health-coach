@@ -16,12 +16,16 @@
 ## Profile / Plan
 
 **"intake.json has empty goals"**
-- Run onboarding or `intake-from-goals.js`. Never write `goals: []` if the user stated goals.
+- Run onboarding. Never write `goals: []` if the user stated goals.
 
 **Plan shows no Strength sessions**
 - Check `intake.json` has a strength or bodycomp goal, or baseline with strength history.
 
 ## Calendar
+
+**"SPORT_CALENDAR_ID not set"**
+- Add `SPORT_CALENDAR_ID=your-khal-calendar-id` to env or `workspace/.env`
+- Find your calendar ID with `khal list` or in vdirsyncer config. Never commit this value.
 
 **Events not appearing**
 - Run `vdirsyncer sync` before `calendar-publish.js`

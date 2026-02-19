@@ -24,6 +24,8 @@ Assessment-first health and fitness coach. Builds a profile from Salvor data (op
 - **Salvor skill**: Only needed when using Salvor sync; ensure enabled if SALVOR_API_KEY is set.
 - **Calendar (optional)**: For publishing planned sessions — requires vdirsyncer + khal. **Always run `vdirsyncer sync` first** before any calendar write.
 
+**→ See `INSTALL.md`** in this skill folder for: first run, cron jobs, heartbeats (proactive agent checks in OpenClaw-style systems).
+
 ## Timezone
 
 All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC; derive `localDate` for day aggregation.
@@ -73,10 +75,18 @@ Follow Assessment-First Flow above. Then, if intake is missing:
 Write `intake.json` via `scripts/intake/intake-writer.js` **with goals included**. Never write empty `goals: []` if the user stated goals. Format:
 - Endurance: `{ id, kind: "endurance", subKind: "marathon", dateLocal: "YYYY-MM-DD", priority: "target_time"|"finish", targetTimeSeconds?: 14400 }`
 - Strength: `{ id, kind: "strength", priority: "moderate" }`
-- Bodycomp: `{ id, kind: "bodycomp", priority: "moderate" }`
+- Bodycomp: `{ id, kind: "bodycomp", priority: "moderate", targetWeightKg?: 75, direction?: "lose"|"gain" }`
+- Sleep: `{ id, kind: "sleep", priority: "moderate", targetTotalMinutes?: 480 }` — 480 = 8h
+- VO2max: `{ id, kind: "vo2max", priority: "moderate", targetVo2max?: 50 }`
+- RHR/HRV: `targetRhr`, `targetHrv` for recovery goals (optional)
+- Targets enable progress tracking; vitals-trend and sleep-trend show progress in `--summary`. No new scripts — extend existing ones.
 - Also set `milestones: [{ id, kind: "marathon", dateLocal, priority, targetTimeSeconds? }]` for endurance events.
 
 **Parsing user input to JSON:**
+- "75kg lean", "abnehmen auf 75" → targetWeightKg: 75, direction: "lose"
+- "80kg zunehmen", "gain auf 80" → targetWeightKg: 80, direction: "gain"
+- "8 Stunden", "besserer Schlaf", "8h schlafen" → targetTotalMinutes: 480
+- "VO2max 50", "höherer VO2max" → kind: "vo2max", targetVo2max: 50
 - "every day" / "Mon–Sun" → daysAvailable: ["mo","tu","we","th","fr","sa","su"]
 - "Friday Sunday rest" → preferredRestDays: ["fr","su"]; daysAvailable = all except those
 - Day keys: mo, tu, we, th, fr, sa, su
@@ -90,7 +100,7 @@ Then trigger profile + plan generation.
 
 - If Salvor available: Run `scripts/sync/salvor-sync.js` first (bootstrap 365d), then `scripts/plan/profile-builder.js`
 - If no Salvor: Run `scripts/plan/profile-builder.js` (builds manual profile from intake)
-- **Before plan-generator**: Ensure `intake.json` has non-empty `goals` (and `milestones` for endurance). If empty but user stated goals, re-write intake with goals or run `scripts/intake/intake-from-goals.js` (when `health/goals.md` exists).
+- **Before plan-generator**: Ensure `intake.json` has non-empty `goals` (and `milestones` for endurance). If empty but user stated goals, re-write intake with goals via `intake-writer.js`.
 - Generate plan: `node {baseDir}/scripts/plan/plan-generator.js` (goal-driven: endurance, strength, habits)
 - **When summarizing the plan** (e.g. from `training_plan_week.json`): Include ALL session kinds — LR, Z2, Tempo, **Strength**, etc. Never omit Strength sessions; they are part of the plan when user has strength/bodycomp goals or baseline.
 
@@ -128,8 +138,7 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 **intake/**:
 | Script | Purpose |
 |--------|---------|
-| `intake-from-goals.js` | Pre-fill intake from goals.md |
-| `intake-writer.js` | Write intake.json from JSON (validates v3) |
+| `intake-writer.js` | Write intake.json from JSON (validates v3); use after onboarding Q&A |
 
 **plan/**:
 | Script | Purpose |
@@ -149,7 +158,7 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 |--------|---------|
 | `status-writer.js` | Set/clear status (illness, injury, travel, deload); respects status in publish/replan |
 
-**lib/** (shared): `intake-validation.js`, `status-helper.js`
+**lib/** (shared): `intake-validation.js`, `status-helper.js`, `goal-progress.js` (unified progress for all metric goals)
 
 **validate/**:
 | Script | Purpose |
@@ -167,7 +176,20 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 | `weekly-summary.js` | Consolidates volume, sleep, readiness; writes `health_weekly_summary.json`; `--text` |
 | `load-management.js` | Acute:Chronic Load Ratio (injury risk); `--type Running`, `--summary` |
 | `running-form-trend.js` | GCT, stride, vertical oscillation over time; `--summary` |
-| `vitals-trend.js` | RHR, HRV, weight, VO2max over time; `--summary` |
+| `vitals-trend.js` | RHR, HRV, weight, VO2max; goal progress for weight/vo2max/rhr/hrv; `--summary` |
+| `sleep-trend.js` | Sleep total, deep, REM; goal progress for sleep target; `--summary` |
+
+## Goal Progress & Feedback (unified)
+
+`profile.goalProgress` / `health_profile_summary.goalProgress` contains progress for all goals with targets (bodycomp, sleep, vo2max, rhr, hrv). **Use existing scripts** — no new ones:
+
+- **vitals-trend.js --summary**: Shows goal progress for weight, VO2max, RHR, HRV
+- **sleep-trend.js --summary**: Shows goal progress for sleep target
+
+For each item in `goalProgress`:
+- **trendInRightDirection: true**: Congratulate — e.g. "Your weight/sleep is moving toward your goal."
+- **trendInRightDirection: false**: Gently note — e.g. "Trend is opposite your goal; consider adjusting."
+- **current: null**: Mention that tracking (e.g. via Salvor) would enable progress feedback.
 
 ## Proactive Check-ins
 
@@ -192,4 +214,4 @@ Planning rules are traceable to `research/` in this skill folder. Each rule has 
 
 ## Troubleshooting
 
-See `TROUBLESHOOTING.md` for sync, profile, calendar, and script issues.
+See `TROUBLESHOOTING.md` for sync, profile, calendar, and script issues. See `INSTALL.md` for setup, cron, and heartbeat configuration.

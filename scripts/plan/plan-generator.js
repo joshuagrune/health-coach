@@ -295,7 +295,7 @@ function planEndurance(intake, profile, today, constraints, blockedDates, hasStr
       remaining = remaining.slice(0, cap);
     }
 
-    const strengthPerWeek = hasStrength ? (intake.baseline?.strengthFrequencyPerWeek ?? profile?.workouts?.strengthCount ? Math.ceil(profile.workouts.strengthCount / 4) : 2) : 0;
+    const strengthPerWeek = hasStrength ? (intake.baseline?.strengthFrequencyPerWeek ?? (profile?.workouts?.strengthCount != null ? Math.ceil((profile?.workouts?.strengthCount ?? 0) / 4) : 2)) : 0;
     const strengthCandidates = remaining.filter((s) => !hardAdjacent.has(s.dateStr));
     const strengthSlots = [];
     for (const slot of strengthCandidates) {

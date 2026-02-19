@@ -39,6 +39,8 @@ Add to `~/.openclaw/openclaw.json`:
 
 **Salvor is optional.** If `SALVOR_API_KEY` is set, the skill can sync and analyze your health data automatically. If not set, the agent will use manual intake to build your profile.
 
+**Calendar publish** requires `SPORT_CALENDAR_ID` (your khal calendar ID). Set in env or `workspace/.env`. Never commit this value.
+
 ## Assessment-First Flow
 
 On first use, the agent asks: "Should I sync and analyze your health data first (recommended)?" If yes and key exists, it runs `salvor-sync.js` then `profile-builder.js`. If no or key missing, it does manual intake and builds a profile from your answers.
@@ -53,7 +55,7 @@ On first use, the agent asks: "Should I sync and analyze your health data first 
 
 1. (Optional) Set `SALVOR_API_KEY` in config or env for data-driven profile.
 2. Run `node ~/.openclaw/skills/health-coach/scripts/sync/salvor-sync.js` (bootstrap 365d) — only if using Salvor.
-3. Run `node ~/.openclaw/skills/health-coach/scripts/intake/intake-from-goals.js` (or complete onboarding).
+3. Complete onboarding (agent collects constraints, baseline, goals) and write `intake.json` via `intake-writer.js`.
 4. Run `node ~/.openclaw/skills/health-coach/scripts/plan/profile-builder.js`.
 5. Run `node ~/.openclaw/skills/health-coach/scripts/plan/plan-generator.js`.
 
@@ -83,6 +85,26 @@ node ~/.openclaw/skills/health-coach/scripts/analysis/vitals-trend.js [--days 36
 
 - **plan/adaptive-replanner.js**: Match Salvor workouts to planned sessions; mark completed/missed/skipped.
 - **calendar/calendar-reconcile.js**: After `vdirsyncer sync`, detect moved/deleted calendar events; update plan. Run before adaptive-replanner if using calendar publish.
+
+## Heartbeats (for Agent Systems like OpenClaw)
+
+In agent systems that support **heartbeats** (periodic background checks), the Health Coach becomes proactive: the agent reads fresh data and reaches out when something needs attention.
+
+**Recommended heartbeat task** — add to your agent's `HEARTBEAT.md` or equivalent:
+
+1. **Check** `current/health_profile_summary.json`, `current/training_plan_week.json`, optionally `current/health_weekly_summary.json`
+2. **Triggers for proactive outreach**:
+   - `flags.sleepDeficit` → "Your sleep was below average recently. Should I reduce intensity this week?"
+   - `flags.loadSpike` → "Training volume has increased significantly. Want to schedule a deload week?"
+   - `flags.lowReadiness` → "Readiness is low — light sessions or rest today?"
+   - No workout in 3+ days (compare `workout_calendar.json` / Salvor vs today) → "You haven't trained in a few days — intentional or should I adjust the plan?"
+   - `goalProgress` with `trendInRightDirection: true` → Congratulate (e.g. "Your weight/sleep is moving toward your goal.")
+   - `goalProgress` with `trendInRightDirection: false` → Gentle nudge (e.g. "Trend is opposite your goal; consider adjusting.")
+3. **If relevant**: Send a short message (Telegram, etc.). **Else**: continue (no message).
+
+These files are written by the cron jobs below. Run cron first so the agent has fresh data to check.
+
+---
 
 ## Cron Jobs (recommended)
 

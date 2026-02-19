@@ -25,7 +25,7 @@ All scripts live in `scripts/` within this skill folder. See [scripts/README.md]
 | Script | Purpose |
 |--------|---------|
 | salvor-sync.js | Long-term Salvor sync (bootstrap 365d, paginated, idempotent) |
-| intake-from-goals.js | Pre-populate intake from goals.md (schema v3) |
+| intake-writer.js | Write intake.json from JSON (schema v3); use after onboarding |
 | intake-writer.js | Write intake.json from JSON (validates v3) |
 | intake-validation.js | Intake schema v3 validation (used by writer/plan-generator) |
 | profile-builder.js | Build profile from Salvor or manual intake |

@@ -12,6 +12,16 @@ const path = require('path');
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
 const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
+const INTAKE_FILE = path.join(COACH_ROOT, 'intake.json');
+const { getGoalsWithTargets, computeFromVitalsByPeriod, formatProgressLine } = require('../lib/goal-progress');
+
+function loadJson(p) {
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
 const TZ = 'Europe/Berlin';
 
 function loadJsonlFiles(prefix) {
@@ -106,6 +116,22 @@ function main() {
       if (p.lastWeight != null) parts.push(`${p.lastWeight} kg`);
       if (p.lastVo2 != null) parts.push(`VO2max ${p.lastVo2}`);
       console.log(`${p.period}  (${p.samples})  ${parts.join('  |  ')}`);
+    }
+    const intake = loadJson(INTAKE_FILE);
+    const goalsWithTargets = getGoalsWithTargets(intake?.goals || []);
+    const vitalsGoals = goalsWithTargets.filter((g) => ['weight', 'vo2max', 'rhr', 'hrv'].includes(g.metric));
+    if (vitalsGoals.length > 0 && result.byPeriod.length >= 1) {
+      const progress = computeFromVitalsByPeriod(vitalsGoals, result.byPeriod);
+      if (progress.length > 0) {
+        console.log('\n--- Goal Progress (Vitals) ---');
+        for (const p of progress) {
+          const line = p.current != null
+            ? formatProgressLine(p)
+            : `${p.kind}: Ziel ${p.target}${p.unit || ''} (keine Daten)`;
+          console.log(line);
+        }
+        console.log('');
+      }
     }
     console.log('');
   } else {

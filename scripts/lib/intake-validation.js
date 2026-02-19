@@ -5,9 +5,10 @@
  */
 
 const VALID_DAY_KEYS = ['mo', 'tu', 'we', 'wed', 'th', 'fr', 'sa', 'su', 'sun'];
-const VALID_GOAL_KINDS = ['endurance', 'strength', 'bodycomp', 'sleep', 'general'];
+const VALID_GOAL_KINDS = ['endurance', 'strength', 'bodycomp', 'sleep', 'vo2max', 'general'];
 const VALID_ENDURANCE_SUBKINDS = ['marathon', 'half', '10k', '5k', 'cycling', 'triathlon_sprint', 'triathlon_olympic', 'triathlon_70.3', 'triathlon_ironman'];
 const VALID_STRENGTH_SPLITS = ['full_body', 'upper_lower', 'push_pull_legs', 'bro_split'];
+const VALID_BODYCOMP_DIRECTIONS = ['lose', 'gain'];
 
 /**
  * Validate intake payload. Throws with clear message or exits(1) if invalid.
@@ -49,6 +50,29 @@ function validateIntakeV3(payload, opts = {}) {
     }
     if (g.kind && !VALID_GOAL_KINDS.includes(g.kind)) {
       errors.push(`Unknown goal kind: ${g.kind}. Valid: ${VALID_GOAL_KINDS.join(', ')}`);
+    }
+    if (g.kind === 'bodycomp') {
+      if (g.targetWeightKg != null) {
+        const n = Number(g.targetWeightKg);
+        if (isNaN(n) || n < 35 || n > 250) {
+          errors.push(`Bodycomp goal "${g.id || 'bodycomp'}" targetWeightKg must be 35–250.`);
+        }
+      }
+      if (g.direction != null && !VALID_BODYCOMP_DIRECTIONS.includes(g.direction)) {
+        errors.push(`Bodycomp goal "${g.id || 'bodycomp'}" direction must be "lose" or "gain".`);
+      }
+    }
+    if (g.kind === 'sleep' && g.targetTotalMinutes != null) {
+      const n = Number(g.targetTotalMinutes);
+      if (isNaN(n) || n < 240 || n > 600) {
+        errors.push(`Sleep goal "${g.id || 'sleep'}" targetTotalMinutes must be 240–600 (4–10h).`);
+      }
+    }
+    if (g.kind === 'vo2max' && g.targetVo2max != null) {
+      const n = Number(g.targetVo2max);
+      if (isNaN(n) || n < 25 || n > 90) {
+        errors.push(`VO2max goal "${g.id || 'vo2max'}" targetVo2max must be 25–90.`);
+      }
     }
   }
 

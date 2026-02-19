@@ -3,7 +3,7 @@
  * Publishes next 7–14 days of planned sessions to Sport calendar via khal.
  * Always runs vdirsyncer sync first. Supports --dry-run.
  *
- * Requires: vdirsyncer, khal. Sport calendar ID from sync-workouts-and-calendar.
+ * Requires: vdirsyncer, khal. SPORT_CALENDAR_ID in env or workspace/.env.
  */
 
 const { execSync } = require('child_process');
@@ -13,7 +13,19 @@ const path = require('path');
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
 const CALENDAR_FILE = path.join(COACH_ROOT, 'workout_calendar.json');
-const SPORT_CALENDAR_ID = '849096C3-99D9-478B-B5D2-50C788A33AAF';
+/** Sport calendar ID (khal -a). Set SPORT_CALENDAR_ID in env or workspace/.env. Never hardcode. */
+function getSportCalendarId() {
+  if (process.env.SPORT_CALENDAR_ID) return process.env.SPORT_CALENDAR_ID.trim().replace(/^["']|["']$/g, '');
+  try {
+    const envPath = path.join(WORKSPACE, '.env');
+    if (fs.existsSync(envPath)) {
+      const raw = fs.readFileSync(envPath, 'utf8');
+      const m = raw.match(/^\s*SPORT_CALENDAR_ID\s*=\s*(.+)/m);
+      if (m) return m[1].trim().replace(/^["']|["']$/g, '');
+    }
+  } catch (_) {}
+  return null;
+}
 const TZ = 'Europe/Berlin';
 const DEFAULT_START = '10:00';
 const DEFAULT_DURATION_MIN = 60;
@@ -67,6 +79,12 @@ function main() {
     return;
   }
 
+  const sportCalendarId = getSportCalendarId();
+  if (!sportCalendarId) {
+    console.error('SPORT_CALENDAR_ID not set. Add to env or workspace/.env');
+    process.exit(1);
+  }
+
   if (dryRun) {
     console.log('DRY-RUN. Would create', toPublish.length, 'events:');
     for (const s of toPublish) {
@@ -94,7 +112,7 @@ function main() {
     const title = (s.title || 'Workout').replace(/"/g, '\\"');
     const desc = `health-coach:${s.id}`;
     try {
-      run(`khal new ${dd} ${DEFAULT_START} ${endTime} "${title}" :: "${desc}" -a ${SPORT_CALENDAR_ID}`);
+      run(`khal new ${dd} ${DEFAULT_START} ${endTime} "${title}" :: "${desc}" -a ${sportCalendarId}`);
       created++;
       // khal doesn't return UID easily; we'd need to search. For now we mark as published by not re-publishing.
       s.calendar = s.calendar || {};

@@ -13,6 +13,16 @@ const path = require('path');
 const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
 const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
+const INTAKE_FILE = path.join(COACH_ROOT, 'intake.json');
+const { getGoalsWithTargets, computeFromSleepByPeriod, formatProgressLine } = require('../lib/goal-progress');
+
+function loadJson(p) {
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
 const TZ = 'Europe/Berlin';
 
 function loadJsonlFiles(prefix) {
@@ -192,6 +202,19 @@ function printSummary(result) {
   if (result.consistency != null) {
     console.log('\n--- Konsistenz ---\n');
     console.log(`  Std.Abw. Schlafdauer: ${result.consistency} min`);
+  }
+
+  const intake = loadJson(INTAKE_FILE);
+  const goalsWithTargets = getGoalsWithTargets(intake?.goals || []);
+  const sleepGoals = goalsWithTargets.filter((g) => g.metric === 'sleep');
+  if (sleepGoals.length > 0 && result.byPeriod.length >= 1) {
+    const progress = computeFromSleepByPeriod(sleepGoals, result.byPeriod);
+    if (progress.length > 0) {
+      console.log('\n--- Goal Progress (Sleep) ---\n');
+      for (const p of progress) {
+        console.log('  ' + formatProgressLine(p));
+      }
+    }
   }
 
   console.log('\n--- Letzte 7 Nächte ---\n');

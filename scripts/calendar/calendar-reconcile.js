@@ -15,8 +15,21 @@ const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME |
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
 const CALENDAR_FILE = path.join(COACH_ROOT, 'workout_calendar.json');
 const ADAPTATION_LOG = path.join(COACH_ROOT, 'adaptation_log.jsonl');
-const SPORT_CALENDAR_ID = '849096C3-99D9-478B-B5D2-50C788A33AAF';
 const TZ = 'Europe/Berlin';
+
+/** Sport calendar ID. Set SPORT_CALENDAR_ID in env or workspace/.env. Never hardcode. */
+function getSportCalendarId() {
+  if (process.env.SPORT_CALENDAR_ID) return process.env.SPORT_CALENDAR_ID.trim().replace(/^["']|["']$/g, '');
+  try {
+    const envPath = path.join(WORKSPACE, '.env');
+    if (fs.existsSync(envPath)) {
+      const raw = fs.readFileSync(envPath, 'utf8');
+      const m = raw.match(/^\s*SPORT_CALENDAR_ID\s*=\s*(.+)/m);
+      if (m) return m[1].trim().replace(/^["']|["']$/g, '');
+    }
+  } catch (_) {}
+  return null;
+}
 
 const VDIRSYNCER_BASE = process.env.VDIRSYNCER_CALENDAR_PATH || path.join(process.env.HOME || '/root', '.local/share/vdirsyncer/calendars');
 
@@ -62,14 +75,15 @@ function parseIcsForHealthCoach(icsContent) {
 
 /** Find calendar directory for Sport calendar */
 function findCalendarDir() {
-  if (!fs.existsSync(VDIRSYNCER_BASE)) return null;
+  const sportCalendarId = getSportCalendarId();
+  if (!sportCalendarId || !fs.existsSync(VDIRSYNCER_BASE)) return null;
   const dirs = fs.readdirSync(VDIRSYNCER_BASE, { withFileTypes: true });
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
     const sub = path.join(VDIRSYNCER_BASE, d.name);
     const subDirs = fs.readdirSync(sub, { withFileTypes: true });
     for (const sd of subDirs) {
-      if (sd.isDirectory() && sd.name === SPORT_CALENDAR_ID) {
+      if (sd.isDirectory() && sd.name === sportCalendarId) {
         return path.join(sub, sd.name);
       }
     }
@@ -102,7 +116,10 @@ function main() {
   }
 
   const calDir = findCalendarDir();
-  const sessionToDate = readCalendarEvents(calDir);
+  if (!getSportCalendarId()) {
+    console.log('SPORT_CALENDAR_ID not set. Skipping calendar event reconciliation.');
+  }
+  const sessionToDate = calDir ? readCalendarEvents(calDir) : {};
 
   const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
   const sessions = calendar.plan.sessions;
@@ -113,6 +130,7 @@ function main() {
     if (s.localDate < today) continue;
     const published = s.calendar?.publishedAt || s.calendar?.khalUid;
     if (!published) continue;
+    if (!calDir) continue; // Can't reconcile without calendar access
 
     const calDate = sessionToDate[s.id];
     if (!calDate) {

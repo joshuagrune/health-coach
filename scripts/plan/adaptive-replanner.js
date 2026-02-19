@@ -106,16 +106,36 @@ function timeMatch(plannedDate, plannedTitle, workout) {
   return true;
 }
 
+/** Duration match: planned vs actual within ±30% (e.g. 60min planned, 42–78min actual) */
+function durationMatch(plannedMin, workout) {
+  if (!plannedMin || plannedMin <= 0) return true;
+  const actualSec = workout.duration_seconds ?? workout.durationSeconds ?? workout.duration ?? 0;
+  const actualMin = actualSec / 60;
+  if (actualMin <= 0) return true;
+  const ratio = actualMin / plannedMin;
+  return ratio >= 0.7 && ratio <= 1.3;
+}
+
 function matchSessionToWorkout(session, workouts) {
   const date = session.localDate;
   const kind = session.kind || session.title;
+  const plannedMin = session.targets?.durationMinutes ?? null;
   for (const w of workouts) {
     const wDate = w.localDate || (w.startTimeUtc ? new Date(w.startTimeUtc).toLocaleDateString('en-CA', { timeZone: TZ }) : null);
     if (wDate !== date) continue;
     if (!kindMatch(kind, w.workout_type || w.workoutType || w.type)) continue;
+    if (!durationMatch(plannedMin, w)) continue;
     return w;
   }
   return null;
+}
+
+/** Normalize Salvor workout ID to consistent salvor: prefix */
+function normalizeWorkoutId(match) {
+  const raw = match.id;
+  if (!raw) return null;
+  const s = String(raw);
+  return s.startsWith('salvor:') ? s : `salvor:${s}`;
 }
 
 function main() {
@@ -139,8 +159,8 @@ function main() {
 
     const match = matchSessionToWorkout(s, workouts);
     if (match) {
-      const wid = match.id || `salvor:${match.id}`;
-      if (usedWorkoutIds.has(wid)) continue;
+      const wid = normalizeWorkoutId(match);
+      if (!wid || usedWorkoutIds.has(wid)) continue;
       usedWorkoutIds.add(wid);
       s.status = 'completed';
       s.actualWorkoutId = wid;

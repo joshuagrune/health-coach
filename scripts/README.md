@@ -7,7 +7,7 @@ All scripts use `OPENCLAW_WORKSPACE` (default `~/.openclaw/workspace`) for data 
 | Dir | Scripts |
 |-----|---------|
 | **sync/** | salvor-sync.js |
-| **intake/** | intake-from-goals.js, intake-writer.js |
+| **intake/** | intake-writer.js |
 | **plan/** | profile-builder.js, plan-generator.js, adaptive-replanner.js |
 | **calendar/** | calendar-publish.js, calendar-reconcile.js |
 | **status/** | status-writer.js |
