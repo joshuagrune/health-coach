@@ -7,6 +7,7 @@ Assessment-first health and fitness coach for OpenClaw. Builds a profile from Sa
 - **Assessment-first**: Agent asks to sync/analyze health data before baseline questions.
 - **Salvor optional**: Works with or without Salvor; manual intake fallback.
 - **Multi-goal planning**: Endurance (marathon, half, 10k, 5k, cycling, triathlon), strength (split-aware), bodycomp, sleep, general fitness.
+- **Strict modality separation**: Strength-only goals generate strength-only sessions (no auto-cardio). Hybrid goals schedule strength and endurance on separate days in one calendar.
 - **Fixed appointments**: Block slots for team sports (e.g. volleyball) with season windows.
 - **Profile**: Cross-domain (endurance, strength, sleep, body) from Salvor or intake; confidence flags.
 - **Adaptation**: Missed-workout reconciliation for LR, Tempo, Intervals, Strength, Cycling, Swim/Bike/Brick.
@@ -25,11 +26,11 @@ All scripts live in `scripts/` within this skill folder. See [scripts/README.md]
 | Script | Purpose |
 |--------|---------|
 | salvor-sync.js | Long-term Salvor sync (bootstrap 365d, paginated, idempotent) |
-| intake-writer.js | Write intake.json from JSON (schema v3); use after onboarding |
-| intake-writer.js | Write intake.json from JSON (validates v3) |
+| intake-writer.js | Write intake.json from JSON (validates v3); use after onboarding |
 | intake-validation.js | Intake schema v3 validation (used by writer/plan-generator) |
 | profile-builder.js | Build profile from Salvor or manual intake |
 | plan-generator.js | Multi-program: endurance, strength, habits; global guardrails |
+| health-notifier.js | Detect new workouts, scores, sleep; emit coach notifications (Telegram) |
 | adaptive-replanner.js | Reconcile actual vs planned; all session types |
 | calendar-publish.js | Publish to Sport calendar |
 | calendar-reconcile.js | Reconcile moved/deleted calendar events |

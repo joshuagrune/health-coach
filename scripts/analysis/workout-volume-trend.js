@@ -104,7 +104,7 @@ function printSummary(result) {
   const label = result.typeFilter !== 'all' ? ` (${result.typeFilter})` : '';
   console.log(`\n=== Workout Volume Trend${label} — ${result.period}ly, last ${result.days} days ===\n`);
   if (result.byPeriod.length === 0) {
-    console.log('Keine Workouts gefunden.\n');
+    console.log('No workouts found.\n');
     return;
   }
   const maxDur = Math.max(...result.byPeriod.map((p) => p.durationMinutes));
@@ -117,7 +117,7 @@ function printSummary(result) {
   }
   const total = result.byPeriod.reduce((a, p) => a + p.durationMinutes, 0);
   const avg = total / result.byPeriod.length;
-  console.log(`\nGesamt: ${total} min | Ø pro ${result.period}: ${Math.round(avg)} min\n`);
+  console.log(`\nTotal: ${total} min | Avg per ${result.period}: ${Math.round(avg)} min\n`);
 }
 
 main();

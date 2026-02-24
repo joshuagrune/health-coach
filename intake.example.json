@@ -58,5 +58,9 @@
   "safetyGates": {
     "painStopRule": "Stop and rest if pain > 4/10 or persists next day",
     "illnessRule": "If fever or flu: no training until 48h symptom-free"
-  }
+  },
+  "notes": [
+    "Strength-only goals create strength-only plans (no auto Zone 2/cardio).",
+    "If both endurance and strength goals are present, sessions stay separated by day in one calendar."
+  ]
 }

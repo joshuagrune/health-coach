@@ -106,7 +106,7 @@ function main() {
   if (summary) {
     console.log('\n=== Vitals Trend ===\n');
     if (result.byPeriod.length === 0) {
-      console.log('Keine Vitals-Daten gefunden.\n');
+      console.log('No vitals data found.\n');
       return;
     }
     for (const p of result.byPeriod) {

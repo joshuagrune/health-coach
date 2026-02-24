@@ -145,6 +145,7 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 |--------|---------|
 | `profile-builder.js` | Compute `profile.json` from Salvor cache or intake; write `health_profile_summary.json` |
 | `plan-generator.js` | Multi-program: endurance, strength, habits; fixed appointments; global guardrails |
+| `health-notifier.js` | Detect new workouts, scores (today), sleep (last night); emit coach notifications (Telegram) |
 | `adaptive-replanner.js` | Reconcile actual vs planned; all session types; append to `adaptation_log.jsonl` |
 
 **calendar/**:

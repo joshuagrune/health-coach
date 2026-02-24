@@ -105,7 +105,7 @@ function main() {
   if (summary) {
     console.log('\n=== Running Form Trend ===\n');
     if (result.byPeriod.length === 0) {
-      console.log('Keine Läufe mit GCT/Stride/Vert.Osz. gefunden (Watch/Tracker nötig).\n');
+      console.log('No runs with GCT/Stride/Vert.Osc. found (watch/tracker required).\n');
       return;
     }
     for (const p of result.byPeriod) {
@@ -113,9 +113,9 @@ function main() {
       if (p.gctMs != null) parts.push(`GCT ${p.gctMs}ms`);
       if (p.strideCm != null) parts.push(`Stride ${p.strideCm}cm`);
       if (p.vertOscCm != null) parts.push(`Vert ${p.vertOscCm}cm`);
-      console.log(`${p.period}  (${p.runs} Läufe)  ${parts.join('  |  ')}`);
+      console.log(`${p.period}  (${p.runs} runs)  ${parts.join('  |  ')}`);
     }
-    console.log('\nGCT↑/Stride↓ kann Ermüdung anzeigen. Vert.Osz. stabil halten.\n');
+    console.log('\nGCT↑/Stride↓ may indicate fatigue. Keep Vert.Osc. stable.\n');
   } else {
     console.log(JSON.stringify(result));
   }

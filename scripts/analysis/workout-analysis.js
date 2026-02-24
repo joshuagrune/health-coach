@@ -179,19 +179,19 @@ function printSummary(result) {
     console.log(`\n=== ${type} (${data.count} workouts, last ${result.days} days) ===\n`);
     const latest = data.comparison?.latest || data.latest[0];
     if (!latest) continue;
-    console.log(`Letzter: ${latest.date}`);
-    if (latest.durationMinutes) console.log(`  Dauer: ${latest.durationMinutes} min`);
-    if (latest.distanceKm) console.log(`  Distanz: ${latest.distanceKm} km`);
+    console.log(`Latest: ${latest.date}`);
+    if (latest.durationMinutes) console.log(`  Duration: ${latest.durationMinutes} min`);
+    if (latest.distanceKm) console.log(`  Distance: ${latest.distanceKm} km`);
     if (latest.pacePerKm) console.log(`  Pace: ${latest.pacePerKm}`);
-    if (latest.avgHeartRate) console.log(`  Ø Puls: ${Math.round(latest.avgHeartRate)} bpm`);
+    if (latest.avgHeartRate) console.log(`  Avg HR: ${Math.round(latest.avgHeartRate)} bpm`);
     if (latest.groundContactTimeS != null) console.log(`  GCT: ${(latest.groundContactTimeS * 1000).toFixed(0)} ms`);
-    if (latest.strideLengthCm != null) console.log(`  Schrittlänge: ${latest.strideLengthCm} cm`);
-    if (latest.verticalOscillationCm != null) console.log(`  Vert. Oszillation: ${latest.verticalOscillationCm} cm`);
-    if (latest.powerAvgW != null) console.log(`  Ø Power: ${Math.round(latest.powerAvgW)} W`);
+    if (latest.strideLengthCm != null) console.log(`  Stride length: ${latest.strideLengthCm} cm`);
+    if (latest.verticalOscillationCm != null) console.log(`  Vertical oscillation: ${latest.verticalOscillationCm} cm`);
+    if (latest.powerAvgW != null) console.log(`  Avg power: ${Math.round(latest.powerAvgW)} W`);
     const deltas = data.comparison?.deltas;
     if (deltas && Object.keys(deltas).length) {
-      console.log('\n  vs. Ø der letzten 5:');
-      const labels = { durationMinutes: 'Dauer', distanceKm: 'Distanz', paceSecondsPerKm: 'Pace (s/km)', avgHeartRate: 'Ø Puls', maxHeartRate: 'Max Puls', groundContactTimeS: 'GCT', strideLengthCm: 'Schrittlänge', verticalOscillationCm: 'Vert.Osz.', powerAvgW: 'Power' };
+      console.log('\n  vs. avg of last 5:');
+      const labels = { durationMinutes: 'Duration', distanceKm: 'Distance', paceSecondsPerKm: 'Pace (s/km)', avgHeartRate: 'Avg HR', maxHeartRate: 'Max HR', groundContactTimeS: 'GCT', strideLengthCm: 'Stride length', verticalOscillationCm: 'Vert.Osc.', powerAvgW: 'Power' };
       for (const [k, v] of Object.entries(deltas)) {
         const label = labels[k] || k;
         const sign = v.delta > 0 ? '+' : '';

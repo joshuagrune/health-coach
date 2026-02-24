@@ -4,7 +4,7 @@
  * Uses temp workspace. Run: node scripts/run-scenario-tests.js
  */
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -12,8 +12,8 @@ const os = require('os');
 const SKILL_DIR = path.join(__dirname, '..', '..');
 const TEMP_BASE = path.join(os.tmpdir(), 'health-coach-scenarios');
 
-function run(cmd, env = {}) {
-  return execSync(cmd, {
+function run(env = {}) {
+  return execFileSync(process.execPath, ['scripts/plan/plan-generator.js'], {
     encoding: 'utf8',
     env: { ...process.env, OPENCLAW_WORKSPACE: TEMP_BASE, ...env },
     cwd: SKILL_DIR,
@@ -86,6 +86,36 @@ const scenarios = [
   },
 ];
 
+function assertScenario(name, sessions) {
+  const enduranceKinds = new Set(['LR', 'Tempo', 'Intervals', 'Z2', 'Cycling', 'Swim', 'Bike', 'Brick']);
+  if (name === 'strength-only') {
+    const strengthCount = sessions.filter((s) => s.kind === 'Strength').length;
+    const enduranceCount = sessions.filter((s) => enduranceKinds.has(s.kind)).length;
+    if (strengthCount === 0) return 'strength-only: expected at least one Strength session';
+    if (enduranceCount !== 0) return `strength-only: expected zero endurance sessions, got ${enduranceCount}`;
+    if (!sessions.every((s) => s.modality === 'strength')) return 'strength-only: expected all modalities to be "strength"';
+  }
+
+  if (name === 'endurance-only') {
+    if (!sessions.every((s) => s.modality === 'endurance')) return 'endurance-only: expected all modalities to be "endurance"';
+  }
+
+  if (name === 'endurance-plus-strength') {
+    const hasStrength = sessions.some((s) => s.kind === 'Strength');
+    const hasEndurance = sessions.some((s) => enduranceKinds.has(s.kind));
+    if (!hasStrength || !hasEndurance) return 'hybrid: expected both strength and endurance sessions';
+    const byDate = {};
+    for (const s of sessions) {
+      if (!byDate[s.localDate]) byDate[s.localDate] = new Set();
+      byDate[s.localDate].add(s.modality);
+    }
+    const mixedDates = Object.values(byDate).filter((mods) => mods.size > 1).length;
+    if (mixedDates > 0) return `hybrid: expected no mixed-modality dates, got ${mixedDates}`;
+  }
+
+  return null;
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -95,14 +125,15 @@ for (const sc of scenarios) {
   const ws = setupWorkspace(sc.name);
   writeIntake(ws, sc.intake);
   try {
-    run(`node scripts/plan/plan-generator.js`, { OPENCLAW_WORKSPACE: ws });
+    run({ OPENCLAW_WORKSPACE: ws });
     const cal = JSON.parse(fs.readFileSync(path.join(ws, 'health', 'coach', 'workout_calendar.json'), 'utf8'));
     const sessions = cal?.plan?.sessions || [];
-    if (sessions.length > 0) {
+    const assertionError = assertScenario(sc.name, sessions);
+    if (sessions.length > 0 && !assertionError) {
       console.log('  OK:', sc.name, '-', sessions.length, 'sessions');
       passed++;
     } else {
-      console.log('  FAIL:', sc.name, '- no sessions generated');
+      console.log('  FAIL:', sc.name, '-', assertionError || 'no sessions generated');
       failed++;
     }
   } catch (e) {

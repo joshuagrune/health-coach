@@ -20,24 +20,24 @@ const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
 const STATE_FILE = path.join(COACH_ROOT, 'salvor_sync_state.json');
 const TZ = 'Europe/Berlin';
 const BASE_URL = 'https://api.salvor.eu';
+const WORKOUT_DETAILS_DAYS = Math.max(0, parseInt(process.env.SALVOR_WORKOUT_DETAILS_DAYS || '21', 10) || 21);
+const INCLUDE_HR_SAMPLES = process.env.SALVOR_INCLUDE_HR_SAMPLES === '1';
 
-// Env fallback (manual run)
-if (!process.env.SALVOR_API_KEY) {
-  const envPaths = [
-    path.join(WORKSPACE, '.env'),
-    path.join(WORKSPACE, '..', '.env'),
-  ];
-  for (const p of envPaths) {
-    try {
-      if (!fs.existsSync(p)) continue;
-      const raw = fs.readFileSync(p, 'utf8');
-      const m = raw.match(/^\s*SALVOR_API_KEY\s*=\s*(.+)/m);
-      if (m) {
-        process.env.SALVOR_API_KEY = m[1].trim().replace(/^["']|["']$/g, '');
-        break;
-      }
-    } catch (_) {}
-  }
+// Prefer workspace .env over OpenClaw-injected env (avoids key mismatch when agent uses different config)
+const envPaths = [
+  path.join(WORKSPACE, '.env'),
+  path.join(WORKSPACE, '..', '.env'),
+];
+for (const p of envPaths) {
+  try {
+    if (!fs.existsSync(p)) continue;
+    const raw = fs.readFileSync(p, 'utf8');
+    const m = raw.match(/^\s*SALVOR_API_KEY\s*=\s*(.+)/m);
+    if (m) {
+      process.env.SALVOR_API_KEY = m[1].trim().replace(/^["']|["']$/g, '');
+      break;
+    }
+  } catch (_) {}
 }
 
 function ensureDir(dir) {
@@ -54,6 +54,94 @@ function curl(url) {
     { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
   );
   return JSON.parse(out || '{}');
+}
+
+function parseDateLocal(dateStr) {
+  return new Date(dateStr + 'T12:00:00');
+}
+
+function normalizeZoneLabel(key) {
+  const s = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (s === '1' || s === 'z1' || s === 'zone1') return 'z1';
+  if (s === '2' || s === 'z2' || s === 'zone2') return 'z2';
+  if (s === '3' || s === 'z3' || s === 'zone3') return 'z3';
+  if (s === '4' || s === 'z4' || s === 'zone4') return 'z4';
+  if (s === '5' || s === 'z5' || s === 'zone5') return 'z5';
+  return null;
+}
+
+function summarizeHeartRateZones(zones) {
+  if (!zones || typeof zones !== 'object' || Array.isArray(zones)) return null;
+  const out = { z1: 0, z2: 0, z3: 0, z4: 0, z5: 0 };
+
+  const toMinutes = (val) => {
+    if (val == null) return null;
+    if (typeof val === 'number') return val >= 0 ? val : null;
+    if (typeof val === 'object' && val.duration_seconds != null) {
+      const s = Number(val.duration_seconds);
+      return Number.isFinite(s) && s >= 0 ? (s / 60) : null;
+    }
+    const n = Number(val);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+
+  for (const [k, v] of Object.entries(zones)) {
+    const label = normalizeZoneLabel(k);
+    if (!label) continue;
+    const mins = toMinutes(v);
+    if (mins != null) out[label] += mins;
+  }
+
+  const total = out.z1 + out.z2 + out.z3 + out.z4 + out.z5;
+  if (total <= 0) return null;
+
+  const rounded = {
+    z1: Math.round(out.z1),
+    z2: Math.round(out.z2),
+    z3: Math.round(out.z3),
+    z4: Math.round(out.z4),
+    z5: Math.round(out.z5),
+  };
+
+  return {
+    zones: rounded,
+    highMinutes: rounded.z4 + rounded.z5,
+    totalMinutes: rounded.z1 + rounded.z2 + rounded.z3 + rounded.z4 + rounded.z5,
+  };
+}
+
+function fetchWorkoutDetail(workoutId, downsample = true) {
+  if (workoutId == null) return null;
+  const url = `${BASE_URL}/health/workouts/${encodeURIComponent(workoutId)}?downsample=${downsample ? 'true' : 'false'}`;
+  try {
+    const data = curl(url);
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? (data.workout || data.data || data) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function enrichWorkoutsWithDetails(workouts, todayLocal, windowDays) {
+  if (!Array.isArray(workouts) || workouts.length === 0 || windowDays <= 0) return workouts;
+  const cutoff = new Date(parseDateLocal(todayLocal).getTime());
+  cutoff.setDate(cutoff.getDate() - Math.max(0, windowDays - 1));
+
+  return workouts.map((w) => {
+    const localDate = w.localDate || (w.start_time ? toLocalDate(w.start_time) : null);
+    if (!localDate) return w;
+    const d = parseDateLocal(localDate);
+    if (d < cutoff) return w;
+
+    const detail = fetchWorkoutDetail(w.id, true);
+    if (!detail) return w;
+
+    const merged = { ...w, ...detail };
+    if (!INCLUDE_HR_SAMPLES && merged.heart_rate_samples) {
+      delete merged.heart_rate_samples;
+    }
+    if (merged.route_points) delete merged.route_points;
+    return merged;
+  });
 }
 
 /** ISO date in Europe/Berlin for a UTC timestamp */
@@ -113,6 +201,51 @@ function appendJsonl(filePath, records, idField) {
   return toAppend.length;
 }
 
+function upsertJsonl(filePath, records, idField) {
+  ensureDir(path.dirname(filePath));
+  const byId = new Map();
+  const order = [];
+
+  if (fs.existsSync(filePath)) {
+    const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const rec = JSON.parse(line);
+        const id = rec[idField] ?? rec.id ?? null;
+        if (!id) continue;
+        const key = String(id);
+        if (!byId.has(key)) order.push(key);
+        byId.set(key, rec);
+      } catch (_) {}
+    }
+  }
+
+  let changed = 0;
+  for (const rec of records) {
+    const id = rec[idField] ?? rec.id ?? null;
+    if (!id) continue;
+    const key = String(id);
+    const prev = byId.get(key);
+    if (!prev) {
+      order.push(key);
+      byId.set(key, rec);
+      changed++;
+      continue;
+    }
+    const prevStr = JSON.stringify(prev);
+    const nextStr = JSON.stringify(rec);
+    if (prevStr !== nextStr) {
+      byId.set(key, rec);
+      changed++;
+    }
+  }
+
+  if (changed === 0) return 0;
+  const out = order.map((k) => JSON.stringify(byId.get(k))).join('\n') + '\n';
+  fs.writeFileSync(filePath, out, 'utf8');
+  return changed;
+}
+
 /** Normalize workout: add startTimeUtc, endTimeUtc, localDate */
 function normalizeWorkout(w) {
   const startIso = w.start_time ?? w.startTime ?? w.start;
@@ -121,11 +254,17 @@ function normalizeWorkout(w) {
   const durationSec = w.duration_seconds ?? w.durationSeconds ?? w.duration ?? 0;
   const endDate = new Date(startDate.getTime() + durationSec * 1000);
   const localDate = toLocalDate(startIso);
+  const zoneSummary = summarizeHeartRateZones(w.heart_rate_zones);
   return {
     ...w,
     startTimeUtc: startDate.toISOString(),
     endTimeUtc: endDate.toISOString(),
     localDate,
+    ...(zoneSummary ? {
+      heart_rate_zones: zoneSummary.zones,
+      hr_zone_high_minutes: zoneSummary.highMinutes,
+      hr_zone_total_minutes: zoneSummary.totalMinutes,
+    } : {}),
     id: w.id != null ? `salvor:${w.id}` : `salvor:${w.start_time ?? w.startTime ?? w.start}_${(w.workout_type ?? w.workoutType ?? w.type ?? 'unknown').replace(/\s/g, '_')}`,
   };
 }
@@ -275,6 +414,8 @@ function fetchScoresHistory(days, anchorDate) {
   }
 }
 
+const LIGHT_MODE = process.argv.includes('--light') || process.env.SALVOR_LIGHT_SYNC === '1';
+
 function main() {
   const key = process.env.SALVOR_API_KEY;
   if (!key) {
@@ -289,30 +430,41 @@ function main() {
   const now = new Date();
   const todayLocal = now.toLocaleDateString('en-CA', { timeZone: TZ });
 
-  // Decide range: bootstrap (365 days) or incremental (7 days)
-  const bootstrapDays = Math.min(parseInt(process.env.SALVOR_BOOTSTRAP_DAYS || '365', 10) || 365, 730);
-  const incrementalDays = parseInt(process.env.SALVOR_INCREMENTAL_DAYS || '7', 10) || 7;
-
   let startDate, endDate;
-  if (!state.bootstrapDone) {
+  let bootstrapDays = 90;
+  if (LIGHT_MODE) {
+    // Light: nur Workouts + Scores der letzten 2 Tage (für 15-Min-Sync)
     const end = new Date(now);
     const start = new Date(now);
-    start.setDate(start.getDate() - bootstrapDays);
+    start.setDate(start.getDate() - 2);
     startDate = start.toLocaleDateString('en-CA', { timeZone: TZ });
     endDate = end.toLocaleDateString('en-CA', { timeZone: TZ });
   } else {
-    const end = new Date(now);
-    const start = new Date(now);
-    start.setDate(start.getDate() - incrementalDays);
-    startDate = start.toLocaleDateString('en-CA', { timeZone: TZ });
-    endDate = end.toLocaleDateString('en-CA', { timeZone: TZ });
+    // Full: bootstrap (365 days) or incremental (7 days)
+    bootstrapDays = Math.min(parseInt(process.env.SALVOR_BOOTSTRAP_DAYS || '365', 10) || 365, 730);
+    const incrementalDays = parseInt(process.env.SALVOR_INCREMENTAL_DAYS || '7', 10) || 7;
+    if (!state.bootstrapDone) {
+      const end = new Date(now);
+      const start = new Date(now);
+      start.setDate(start.getDate() - bootstrapDays);
+      startDate = start.toLocaleDateString('en-CA', { timeZone: TZ });
+      endDate = end.toLocaleDateString('en-CA', { timeZone: TZ });
+    } else {
+      const end = new Date(now);
+      const start = new Date(now);
+      start.setDate(start.getDate() - incrementalDays);
+      startDate = start.toLocaleDateString('en-CA', { timeZone: TZ });
+      endDate = end.toLocaleDateString('en-CA', { timeZone: TZ });
+    }
   }
 
   let totalAdded = 0;
   let lastWorkoutStart = state.lastWorkoutStartTimeSeen;
 
   // Workouts
-  const workouts = fetchWorkouts(startDate, endDate);
+  const workoutsRaw = fetchWorkouts(startDate, endDate);
+  const detailWindowDays = LIGHT_MODE ? Math.min(3, WORKOUT_DETAILS_DAYS) : WORKOUT_DETAILS_DAYS;
+  const workouts = enrichWorkoutsWithDetails(workoutsRaw, todayLocal, detailWindowDays);
   const byMonth = {};
   for (const w of workouts) {
     const n = normalizeWorkout(w);
@@ -326,7 +478,29 @@ function main() {
   }
   for (const [month, recs] of Object.entries(byMonth)) {
     const fp = path.join(CACHE_DIR, `workouts_${month}.jsonl`);
-    totalAdded += appendJsonl(fp, recs, 'id');
+    totalAdded += upsertJsonl(fp, recs, 'id');
+  }
+
+  if (LIGHT_MODE) {
+    // Light: nur Scores (Strain/Readiness) – 1 API-Call
+    const scores = fetchScoresHistory(2, todayLocal);
+    const scByMonth = {};
+    for (const s of scores) {
+      const n = normalizeScores(s);
+      if (!n) continue;
+      const month = toMonthKey(n.localDate);
+      if (!scByMonth[month]) scByMonth[month] = [];
+      scByMonth[month].push(n);
+    }
+    for (const [month, recs] of Object.entries(scByMonth)) {
+      const fp = path.join(CACHE_DIR, `scores_${month}.jsonl`);
+      totalAdded += appendJsonl(fp, recs, 'id');
+    }
+    state.lastSuccessfulSyncAt = now.toISOString();
+    state.lastWorkoutStartTimeSeen = lastWorkoutStart;
+    saveState(state);
+    console.log(`Salvor sync (light) done. Workouts: ${workouts.length}, Scores: ${scores.length}. New: ${totalAdded}.`);
+    return;
   }
 
   // Sleep

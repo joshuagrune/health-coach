@@ -124,9 +124,9 @@ function main() {
 }
 
 function printSummary(result) {
-  console.log(`\n=== Pace bei ${result.hrZone.min}–${result.hrZone.max} bpm (Z2) — ${result.period}ly, last ${result.days} days ===\n`);
+  console.log(`\n=== Pace at ${result.hrZone.min}–${result.hrZone.max} bpm (Z2) — ${result.period}ly, last ${result.days} days ===\n`);
   if (result.byPeriod.length === 0) {
-    console.log(`Keine Läufe mit Ø Puls in ${result.hrZone.min}–${result.hrZone.max} bpm gefunden.\n`);
+    console.log(`No runs with avg HR in ${result.hrZone.min}–${result.hrZone.max} bpm found.\n`);
     return;
   }
   const paces = result.byPeriod.map((p) => p.avgPaceSecondsPerKm);
@@ -135,10 +135,10 @@ function printSummary(result) {
   for (const p of result.byPeriod) {
     const delta = p.avgPaceSecondsPerKm - best;
     const arrow = delta === 0 ? '★' : delta > 0 ? '↑' : '↓';
-    console.log(`${p.period}  ${p.pacePerKm}  (${p.count} Läufe)  ${arrow}`);
+    console.log(`${p.period}  ${p.pacePerKm}  (${p.count} runs)  ${arrow}`);
   }
-  console.log(`\nBester Ø: ${formatPacePerKm(best)} | Schlechtester: ${formatPacePerKm(worst)}`);
-  console.log('Schneller bei gleichem Puls = bessere Effizienz.\n');
+  console.log(`\nBest avg: ${formatPacePerKm(best)} | Worst: ${formatPacePerKm(worst)}`);
+  console.log('Faster at same HR = better efficiency.\n');
 }
 
 main();

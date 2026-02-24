@@ -180,6 +180,74 @@ function testNoMarathonCentering() {
   else fail('multi-goal', 'plan should have Strength or endurance sessions');
 }
 
+function testModalityTagAndSeparation() {
+  console.log('\n## Modality Separation');
+  const intakePath = path.join(COACH_ROOT, 'intake.json');
+  const calPath = path.join(COACH_ROOT, 'workout_calendar.json');
+  if (!fs.existsSync(intakePath) || !fs.existsSync(calPath)) {
+    ok('skip modality checks (missing intake or calendar)');
+    return;
+  }
+  const intake = loadJson(intakePath);
+  const cal = loadJson(calPath);
+  const sessions = cal?.plan?.sessions || [];
+  if (sessions.length === 0) {
+    ok('skip modality checks (empty plan)');
+    return;
+  }
+
+  const goals = intake?.goals || [];
+  const hasEnduranceGoal = goals.some((g) => g.kind === 'endurance');
+  const hasStrengthGoal = goals.some((g) => g.kind === 'strength');
+  const enduranceKinds = new Set(['LR', 'Tempo', 'Intervals', 'Z2', 'Cycling', 'Swim', 'Bike', 'Brick']);
+  const inferModality = (s) => (s.kind === 'Strength' ? 'strength' : 'endurance');
+
+  const hasAnyModality = sessions.some((s) => !!s.modality);
+  if (!hasAnyModality) {
+    ok('session modality (legacy calendar without modality tags)');
+  } else {
+    const missingModality = sessions.filter((s) => !s.modality);
+    if (missingModality.length === 0) ok('all sessions have modality');
+    else fail('session modality', `${missingModality.length} sessions missing modality`);
+  }
+
+  if (!hasAnyModality) {
+    ok('modality consistency (legacy calendar without modality tags)');
+  } else {
+    const badConsistency = sessions.filter((s) => {
+      const expected = inferModality(s);
+      return s.modality !== expected;
+    });
+    if (badConsistency.length === 0) ok('modality consistent with kind');
+    else fail('modality consistency', `${badConsistency.length} inconsistent sessions`);
+  }
+
+  if (hasStrengthGoal && !hasEnduranceGoal) {
+    const hasEnduranceSession = sessions.some((s) => enduranceKinds.has(s.kind));
+    if (!hasEnduranceSession) ok('strength-only plan has no endurance sessions');
+    else fail('strength-only separation', 'found endurance sessions in strength-only plan');
+  } else {
+    ok('strength-only separation (not applicable)');
+  }
+
+  if (hasStrengthGoal && hasEnduranceGoal) {
+    const byDate = {};
+    for (const s of sessions) {
+      if (!byDate[s.localDate]) byDate[s.localDate] = new Set();
+      byDate[s.localDate].add(s.modality || inferModality(s));
+    }
+    const mixedDates = Object.values(byDate).filter((mods) => mods.size > 1).length;
+    const hasStrengthSession = sessions.some((s) => s.kind === 'Strength');
+    const hasEnduranceSession = sessions.some((s) => enduranceKinds.has(s.kind));
+    if (hasStrengthSession && hasEnduranceSession) ok('hybrid plan contains both modalities');
+    else fail('hybrid coverage', 'missing strength or endurance sessions');
+    if (mixedDates === 0) ok('hybrid has no mixed-modality dates');
+    else fail('hybrid separation', `${mixedDates} mixed-modality dates`);
+  } else {
+    ok('hybrid separation (not applicable)');
+  }
+}
+
 function main() {
   console.log('Health Coach Validation');
   testTimezone();
@@ -189,6 +257,7 @@ function main() {
   testIntakeValidation();
   testCalendarConsistency();
   testNoMarathonCentering();
+  testModalityTagAndSeparation();
   console.log('\n---');
   console.log('Passed:', passed, 'Failed:', failed);
   process.exit(failed > 0 ? 1 : 0);

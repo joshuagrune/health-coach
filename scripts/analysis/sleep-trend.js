@@ -166,14 +166,14 @@ function main() {
 }
 
 function printSummary(result) {
-  console.log(`\n=== Sleep Trend — last ${result.days} days (${result.nights} Nächte) ===\n`);
+  console.log(`\n=== Sleep Trend — last ${result.days} days (${result.nights} nights) ===\n`);
 
   if (result.byPeriod.length === 0) {
-    console.log('Keine Schlafdaten gefunden.\n');
+    console.log('No sleep data found.\n');
     return;
   }
 
-  console.log('--- Pro Woche/Monat ---\n');
+  console.log('--- Per week/month ---\n');
   const maxBar = 25;
   const maxTotal = Math.max(...result.byPeriod.map((p) => p.avgTotal));
   for (const p of result.byPeriod) {
@@ -181,27 +181,27 @@ function printSummary(result) {
     const bar = '█'.repeat(barLen) + '░'.repeat(maxBar - barLen);
     const deepPct = p.avgTotal > 0 ? Math.round((p.avgDeep / p.avgTotal) * 100) : 0;
     const remPct = p.avgTotal > 0 ? Math.round((p.avgRem / p.avgTotal) * 100) : 0;
-    console.log(`${p.period}  Ø ${formatDuration(p.avgTotal)}  (${p.nights} Nächte)  ${bar}`);
+    console.log(`${p.period}  Avg ${formatDuration(p.avgTotal)}  (${p.nights} nights)  ${bar}`);
     console.log(`       Deep: ${formatDuration(p.avgDeep)} (${deepPct}%)  |  REM: ${formatDuration(p.avgRem)} (${remPct}%)  |  Awake: ${formatDuration(p.avgAwake)}  |  σ: ${p.stdTotal.toFixed(0)} min`);
   }
 
-  console.log('\n--- Wochentag vs. Wochenende ---\n');
+  console.log('\n--- Weekday vs. weekend ---\n');
   const wd = result.weekdayVsWeekend;
-  if (wd.weekday != null) console.log(`  Wochentage (Mo–Fr): Ø ${formatDuration(wd.weekday)}  (${wd.weekdayNights} Nächte)`);
-  if (wd.weekend != null) console.log(`  Wochenende (Sa–So): Ø ${formatDuration(wd.weekend)}  (${wd.weekendNights} Nächte)`);
+  if (wd.weekday != null) console.log(`  Weekdays (Mon–Fri): Avg ${formatDuration(wd.weekday)}  (${wd.weekdayNights} nights)`);
+  if (wd.weekend != null) console.log(`  Weekend (Sat–Sun): Avg ${formatDuration(wd.weekend)}  (${wd.weekendNights} nights)`);
   if (wd.weekday != null && wd.weekend != null) {
     const diff = wd.weekend - wd.weekday;
     const absMin = Math.abs(diff);
-    const dir = diff >= 0 ? 'mehr' : 'weniger';
-    console.log(`  Differenz: ${formatDuration(absMin)} ${dir} am Wochenende`);
+    const dir = diff >= 0 ? 'more' : 'less';
+    console.log(`  Difference: ${formatDuration(absMin)} ${dir} on weekends`);
   }
 
-  console.log('\n--- Kurze Nächte ---\n');
+  console.log('\n--- Short nights ---\n');
   console.log(`  < 6h: ${result.shortNights.under6h}  |  < 7h: ${result.shortNights.totalUnder7h}`);
 
   if (result.consistency != null) {
-    console.log('\n--- Konsistenz ---\n');
-    console.log(`  Std.Abw. Schlafdauer: ${result.consistency} min`);
+    console.log('\n--- Consistency ---\n');
+    console.log(`  Std. dev. sleep duration: ${result.consistency} min`);
   }
 
   const intake = loadJson(INTAKE_FILE);
@@ -217,7 +217,7 @@ function printSummary(result) {
     }
   }
 
-  console.log('\n--- Letzte 7 Nächte ---\n');
+  console.log('\n--- Last 7 nights ---\n');
   for (const n of result.last7Nights) {
     const eff = n.total > 0 ? Math.round(((n.total - (n.awake || 0)) / n.total) * 100) : 0;
     console.log(`  ${n.date}  ${formatDuration(n.total)}  Deep: ${formatDuration(n.deep)}  REM: ${formatDuration(n.rem)}  Eff: ${eff}%`);

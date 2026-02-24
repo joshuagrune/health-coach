@@ -120,11 +120,11 @@ function main() {
   if (text) {
     console.log('\n=== Weekly Summary ===\n');
     console.log('Workouts: ' + summary.workouts.count + ' (' + summary.workouts.totalMinutes + ' min)');
-    if (summary.workouts.runs) console.log('  Läufe: ' + summary.workouts.runs + ' × ' + summary.workouts.runKm + ' km');
+    if (summary.workouts.runs) console.log('  Runs: ' + summary.workouts.runs + ' × ' + summary.workouts.runKm + ' km');
     if (summary.workouts.highlight) console.log('  Highlight: ' + summary.workouts.highlight.date + ' ' + summary.workouts.highlight.distanceKm + ' km @ ' + summary.workouts.highlight.pace);
-    console.log('\nSchlaf: Ø ' + (summary.sleep.avgMinutes ? Math.floor(summary.sleep.avgMinutes / 60) + 'h ' + Math.round(summary.sleep.avgMinutes % 60) + 'm' : '—') + ' (' + summary.sleep.nights + ' Nächte)');
+    console.log('\nSleep: Avg ' + (summary.sleep.avgMinutes ? Math.floor(summary.sleep.avgMinutes / 60) + 'h ' + Math.round(summary.sleep.avgMinutes % 60) + 'm' : '—') + ' (' + summary.sleep.nights + ' nights)');
     if (summary.readiness != null) console.log('Readiness: ' + summary.readiness);
-    if (summary.restingHeartRate != null) console.log('Ruhepuls: ' + summary.restingHeartRate + ' bpm');
+    if (summary.restingHeartRate != null) console.log('Resting HR: ' + summary.restingHeartRate + ' bpm');
     if (Object.keys(summary.profileFlags).length) console.log('\nFlags:', summary.profileFlags);
     console.log('');
   } else {
