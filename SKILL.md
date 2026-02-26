@@ -129,6 +129,16 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 - Dry-run: `node {baseDir}/scripts/calendar/calendar-publish.js --dry-run`
 - Publish: `node {baseDir}/scripts/calendar/calendar-publish.js` (requires vdirsyncer sync first)
 
+### 6. Historical Workouts → Calendar
+
+**IMPORTANT — timezone rule:** Salvor stores times as UTC (`startTimeUtc`). Never pass UTC times directly to `khal new`. Always use `calendar-history.js` which converts UTC → Europe/Berlin automatically.
+
+- Dry-run (shows local CET times): `node {baseDir}/scripts/calendar/calendar-history.js --dry-run [--days=30]`
+- Add last 30 days: `node {baseDir}/scripts/calendar/calendar-history.js --days=30`
+- Specific month: `node {baseDir}/scripts/calendar/calendar-history.js --month=2026-02`
+
+⚠️ Never manually construct `khal new` with times from `startTimeUtc` — that's UTC and will be 1h wrong in CET. The script handles the conversion.
+
 ## Scripts (in `{baseDir}/scripts/`)
 
 **sync/**:
@@ -154,6 +164,7 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 |--------|---------|
 | `calendar-reconcile.js` | Reconcile moved/deleted calendar events; reads vdirsyncer storage |
 | `calendar-publish.js` | Publish next 7–14 days to Sport calendar (dry-run supported) |
+| `calendar-history.js` | Add completed Salvor workouts to calendar; **auto-converts UTC→CET** (use for historical events, never raw `khal new` with UTC times) |
 
 **status/**:
 | Script | Purpose |

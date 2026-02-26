@@ -123,4 +123,17 @@ function computeACWR(workouts, todayStr) {
   return chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
 }
 
-module.exports = { isActiveRecoveryType, shouldExcludeFromLoad, computeWorkoutLoad, computeACWR };
+/**
+ * Classify a workout type string as endurance, strength, or other.
+ * Mirrors the logic in profile-builder.js so all scripts use a single source of truth.
+ * @param {string} type - workout_type string
+ * @returns {'endurance'|'strength'|'other'}
+ */
+function workoutModalityClass(type) {
+  const t = (type || '').toLowerCase();
+  if (/run|zone|walking|cycling|cardio|jog|swim|rowing|elliptical|stair|hike/i.test(t) && !/strength|full body|gym|flexibility/i.test(t)) return 'endurance';
+  if (/strength|full body|gym|hypertrophy|pilates|barre|core|crossfit|functional/i.test(t)) return 'strength';
+  return 'other';
+}
+
+module.exports = { isActiveRecoveryType, shouldExcludeFromLoad, computeWorkoutLoad, computeACWR, workoutModalityClass };
