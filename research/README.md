@@ -22,7 +22,7 @@ This folder documents the scientific background for the Health Coach planning ru
 | `sources.md` | Source registry (URLs, annotations) |
 | `marathon_periodization.md` | Marathon: Base → Build → Peak → Taper phases |
 | `tapering_evidence.md` | Taper duration, volume reduction |
-| `load_management_and_injury_risk.md` | Monotony, strain, ACWR, ramp rate |
+| `load_management_and_injury_risk.md` | Monotony, strain, ACWR, ramp rate, recovery exclusion, implementation (load/ACWR/deload) |
 | `adaptive_rules_missed_workouts.md` | Missed-workout handling |
 | `strength_training_evidence.md` | Strength: frequency, volume, deload, progression |
 | `strength_splits_evidence.md` | Strength splits: full-body, PPL, upper/lower, bro-split, upper-body only |

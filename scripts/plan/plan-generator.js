@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { validateIntakeV3 } = require('../lib/intake-validation');
 const { getWorkspace, getCoachRoot, loadJson, loadJsonlFiles } = require('../lib/cache-io');
-const { shouldExcludeFromLoad } = require('../lib/workout-utils');
+const { shouldExcludeFromLoad, computeACWR } = require('../lib/workout-utils');
 
 const WORKSPACE = getWorkspace();
 const COACH_ROOT = getCoachRoot();
@@ -196,6 +196,7 @@ function collectRecentSignals(workouts, today) {
   const yesterday = addDays(today, -1);
   const yesterdayHard = hardDates.has(yesterday);
   const trainedToday = completedDates.has(today);
+  const acwr = computeACWR(workouts, today);
 
   return {
     totalMinutes,
@@ -204,6 +205,7 @@ function collectRecentSignals(workouts, today) {
     completedDates,
     yesterdayHard,
     trainedToday,
+    acwr,
   };
 }
 
@@ -213,8 +215,15 @@ function estimateTargets(intake, profile, mode, recent) {
   const baseEndurance = intake.baseline?.runningFrequencyPerWeek
     ?? (profile?.workouts?.runningCount != null ? Math.max(1, Math.ceil((profile.workouts.runningCount || 0) / 4)) : 3);
 
-  const highLoad = recent.totalMinutes > 360 || recent.hardCount >= 4;
-  const deloadFactor = highLoad ? 0.8 : 1;
+  // Deload when ACWR > 1.3 (Gabbett 2016 conservative threshold) OR blunt
+  // volume/frequency signal as fallback when ACWR data is unavailable (<28d history).
+  // Thresholds: >600 min/week is high even for recreational athletes; >=4 hard
+  // sessions AND >480 min avoids false positives from high-frequency easy work.
+  const acwrHighLoad = recent.acwr != null ? recent.acwr > 1.3 : false;
+  const volumeHighLoad = recent.acwr == null && (recent.totalMinutes > 600 || (recent.hardCount >= 4 && recent.totalMinutes > 480));
+  const highLoad = acwrHighLoad || volumeHighLoad;
+  // True deload: ~45% volume reduction (SRC013 Deload Delphi consensus)
+  const deloadFactor = highLoad ? 0.55 : 1;
 
   const strengthPerWeek = mode === 'strength_only' ? Math.max(1, Math.round(baseStrength * deloadFactor))
     : mode === 'hybrid' ? Math.max(1, Math.round(baseStrength * deloadFactor))
@@ -228,6 +237,7 @@ function estimateTargets(intake, profile, mode, recent) {
     strengthPerWeek,
     endurancePerWeek,
     deload: highLoad,
+    acwr: recent.acwr,
   };
 }
 
@@ -287,6 +297,12 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
     return !existing.some((e) => e.dateStr === prev || e.dateStr === next);
   });
 
+  // During deload: reduce volume (fewer sets, higher rep range at lower load)
+  // rather than skipping strength entirely — maintains neuromuscular stimulus.
+  const strengthTargets = targets.deload
+    ? { durationMinutes: Math.min(40, maxMinutes), setsReps: '2x12-15', intensity: 'light' }
+    : { durationMinutes: Math.min(60, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' };
+
   return chosen.map((slot, i) => createSession({
     id: `sess_strength_1_${slot.dateStr}_str_${i}`,
     programId: 'strength_1',
@@ -295,7 +311,7 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
     kind: 'Strength',
     hardness: 'hard',
     requiresRecovery: true,
-    targets: { durationMinutes: Math.min(60, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' },
+    targets: strengthTargets,
     ruleRefs: ['RULE_STRENGTH_PROGRESSION', 'RULE_NO_BACK_TO_BACK_HARD'],
   }));
 }
@@ -449,7 +465,8 @@ function buildRecommendations(goals, targets) {
   }
   recs.push({ kind: 'planning', title: 'Rolling plan', text: 'Only next 7 days are fixed. Replan weekly from recent execution and recovery.' });
   if (targets.deload) {
-    recs.push({ kind: 'recovery', title: 'Deload signal', text: 'Recent load was high. This week volume/intensity has been reduced.' });
+    const acwrNote = targets.acwr != null ? ` (ACWR ${targets.acwr})` : '';
+    recs.push({ kind: 'recovery', title: 'Deload signal', text: `Acute:Chronic load ratio is elevated${acwrNote}. Volume reduced ~45% this week. Intensity stays — only tonnage drops.` });
   }
   return recs;
 }
@@ -508,11 +525,13 @@ function orchestrate(intake, profile, workouts, today, constraints) {
       strengthPerWeek: targets.strengthPerWeek,
       endurancePerWeek: targets.endurancePerWeek,
       deload: targets.deload,
+      acwr: targets.acwr,
     },
     recent7d: {
       totalMinutes: recentSignals.totalMinutes,
       hardSessions: recentSignals.hardCount,
       yesterdayHard: recentSignals.yesterdayHard,
+      acwr: recentSignals.acwr,
     },
   };
 

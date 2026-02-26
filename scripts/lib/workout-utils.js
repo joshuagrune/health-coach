@@ -1,6 +1,9 @@
 /**
  * Shared workout type helpers.
  * Used by profile-builder, load-management, plan-generator.
+ *
+ * Evidence: load_management_and_injury_risk.md (RULE_RECOVERY_EXCLUDE, Implementation),
+ * sources.md (SRC002 Foster sRPE, SRC004 Gabbett ACWR, SRC005 Hulin, SRC009 Zouhal).
  */
 
 function isActiveRecoveryType(type) {
@@ -12,6 +15,7 @@ function isActiveRecoveryType(type) {
  * Whether to exclude this workout from load (e.g. yoga, mobility).
  * Active recovery types are excluded only if intensity was low (effort/HR).
  * Intense yoga (Power, Hot) still counts.
+ * @see load_management_and_injury_risk.md RULE_RECOVERY_EXCLUDE
  */
 function shouldExcludeFromLoad(w) {
   const type = w.workout_type || w.workoutType || w.type || '';
@@ -37,9 +41,11 @@ function shouldExcludeFromLoad(w) {
 
 /**
  * Compute intensity-weighted load for a workout (TRIMP/sRPE-style).
- * Priority: 1) HR zones (Edwards), 2) effort_score (sRPE), 3) classification, 4) duration only.
- * @param {object} w - Workout with duration_seconds, heart_rate_zones, effort_score, classification, avg_heart_rate
+ * Priority: 1) HR zones (Edwards-style Z1=1..Z5=5), 2) effort_score (sRPE Foster SRC002),
+ * 3) classification, 4) duration only.
+ * @param {object} w - Workout with duration_seconds, heart_rate_zones, effort_score, classification
  * @returns {number} Load in arbitrary units (comparable across workouts)
+ * @see load_management_and_injury_risk.md Implementation
  */
 function computeWorkoutLoad(w) {
   const dur = (w.duration_seconds ?? w.durationSeconds ?? w.duration ?? 0) / 60;
@@ -73,4 +79,38 @@ function computeWorkoutLoad(w) {
   return dur;
 }
 
-module.exports = { isActiveRecoveryType, shouldExcludeFromLoad, computeWorkoutLoad };
+/**
+ * Compute Acute:Chronic Workload Ratio (ACWR) from raw workout history.
+ * Acute = intensity-weighted load over last 7 days with recorded data.
+ * Chronic = intensity-weighted load over last 28 days / 4 (rolling avg).
+ * Returns null when fewer than 7 days of data are available.
+ *
+ * Thresholds: <0.8 detraining | 0.8–1.3 safe | 1.3–1.5 elevated | >1.5 high risk.
+ * Deload trigger at 1.3: Gabbett 2016 [SRC004], Hulin [SRC005]; Zouhal 2021 [SRC009] caveats.
+ *
+ * @param {object[]} workouts - Raw workout array with localDate/date fields
+ * @param {string} todayStr - ISO date string 'YYYY-MM-DD'
+ * @returns {number|null} ratio rounded to 2 decimals, or null if insufficient data
+ */
+function computeACWR(workouts, todayStr) {
+  const byDate = {};
+  for (const w of workouts) {
+    if (shouldExcludeFromLoad(w)) continue;
+    const d = w.localDate || w.date;
+    if (!d || d > todayStr) continue;
+    const load = computeWorkoutLoad(w);
+    byDate[d] = (byDate[d] || 0) + load;
+  }
+
+  const dates = Object.keys(byDate).sort().filter((d) => d <= todayStr);
+  if (dates.length < 7) return null;
+
+  const acuteDates = dates.slice(-7);
+  const chronicDates = dates.slice(-28);
+  const acuteLoad = acuteDates.reduce((a, d) => a + (byDate[d] || 0), 0);
+  const chronicLoad = chronicDates.reduce((a, d) => a + (byDate[d] || 0), 0) / 4;
+
+  return chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
+}
+
+module.exports = { isActiveRecoveryType, shouldExcludeFromLoad, computeWorkoutLoad, computeACWR };
