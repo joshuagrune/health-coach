@@ -1,6 +1,6 @@
 # Analysis Scripts
 
-All scripts read from `workspace/health/coach/salvor_cache/` (no API calls). Run from workspace or with `OPENCLAW_WORKSPACE` set.
+All scripts read from `workspace/health/coach/salvor_cache/` via `lib/cache-io.js` (no API calls). Run from workspace or with `OPENCLAW_WORKSPACE` set.
 
 | Script | Purpose |
 |--------|---------|

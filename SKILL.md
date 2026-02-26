@@ -58,6 +58,7 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
    - Run `scripts/plan/profile-builder.js` (builds manual profile from intake; dataQuality: "manual")
    - Then ask about planning goals.
 
+**Sync on demand**: When the user insists on current/fresh data (e.g. "use current data", "aktuelle Daten", "sync first", "ist das aktuell?", "refresh", "neueste Daten") and SALVOR_API_KEY is set → run `scripts/sync/salvor-sync.js` then `scripts/plan/profile-builder.js` before answering. Do not ask — just sync and then proceed with the answer.
 
 ## Interaction Flows
 
@@ -159,7 +160,7 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 |--------|---------|
 | `status-writer.js` | Set/clear status (illness, injury, travel, deload); respects status in publish/replan |
 
-**lib/** (shared): `intake-validation.js`, `status-helper.js`, `goal-progress.js` (unified progress for all metric goals)
+**lib/** (shared): `cache-io.js` (loadJson, loadJsonlFiles, getRecent), `intake-validation.js`, `status-helper.js`, `goal-progress.js` (unified progress for all metric goals)
 
 **validate/**:
 | Script | Purpose |
@@ -178,7 +179,6 @@ When user says "Ich bin krank", "I'm sick", "erkältet", "Fieber", "traveling ne
 | `load-management.js` | Acute:Chronic Load Ratio (injury risk); `--type Running`, `--summary` |
 | `running-form-trend.js` | GCT, stride, vertical oscillation over time; `--summary` |
 | `vitals-trend.js` | RHR, HRV, weight, VO2max; goal progress for weight/vo2max/rhr/hrv; `--summary` |
-| `sleep-trend.js` | Sleep total, deep, REM; goal progress for sleep target; `--summary` |
 
 ## Goal Progress & Feedback (unified)
 

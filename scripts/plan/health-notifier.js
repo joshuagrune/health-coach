@@ -15,12 +15,12 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
-const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
+const { getWorkspace, loadJson, loadJsonlFiles, TZ } = require('../lib/cache-io');
+
+const WORKSPACE = getWorkspace();
 const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
-const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
 const CURRENT_DIR = path.join(WORKSPACE, 'current');
 const STATE_FILE = path.join(COACH_ROOT, 'workout_notify_state.json');
-const TZ = 'Europe/Berlin';
 const TODAY_FILE = path.join(CURRENT_DIR, 'workouts_today.json');
 const WEEK_FILE = path.join(CURRENT_DIR, 'training_plan_week.json');
 const NOTIFICATION_FILE = path.join(CURRENT_DIR, 'health_coach_notification.json');
@@ -28,32 +28,9 @@ const PENDING_ALERTS_FILE = path.join(CURRENT_DIR, 'health_coach_pending_alerts.
 
 const COOLDOWN_HOURS = Math.max(1, parseInt(process.env.HC_NOTIFY_COOLDOWN_HOURS || '6', 10) || 6);
 
-function loadJson(p, fallback = null) {
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-
 function saveJson(p, obj) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
-}
-
-function loadJsonlFiles(prefix) {
-  const out = [];
-  if (!fs.existsSync(CACHE_DIR)) return out;
-  const files = fs.readdirSync(CACHE_DIR).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl'));
-  for (const f of files.sort()) {
-    const lines = fs.readFileSync(path.join(CACHE_DIR, f), 'utf8').trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        out.push(JSON.parse(line));
-      } catch (_) {}
-    }
-  }
-  return out;
 }
 
 function toLocalDate(d) {

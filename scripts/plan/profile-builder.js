@@ -7,58 +7,33 @@
 
 const fs = require('fs');
 const path = require('path');
-
-const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
-const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
-const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
-const INTAKE_FILE = path.join(COACH_ROOT, 'intake.json');
+const { getWorkspace, getCoachRoot, loadJson, loadJsonlFiles, getRecent, TZ } = require('../lib/cache-io');
 const { computeFromProfile, getGoalsWithTargets } = require('../lib/goal-progress');
+const { isActiveRecoveryType } = require('../lib/workout-utils');
+
+const WORKSPACE = getWorkspace();
+const COACH_ROOT = getCoachRoot();
+const INTAKE_FILE = path.join(COACH_ROOT, 'intake.json');
 const PROFILE_FILE = path.join(COACH_ROOT, 'profile.json');
 const SUMMARY_FILE = path.join(WORKSPACE, 'current', 'health_profile_summary.json');
-const TZ = 'Europe/Berlin';
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function loadJson(p) {
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function loadJsonlFiles(prefix) {
-  const out = [];
-  if (!fs.existsSync(CACHE_DIR)) return out;
-  const files = fs.readdirSync(CACHE_DIR).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl'));
-  for (const f of files.sort()) {
-    const lines = fs.readFileSync(path.join(CACHE_DIR, f), 'utf8').trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        out.push(JSON.parse(line));
-      } catch (_) {}
-    }
-  }
-  return out;
-}
-
-function getRecent(records, days = 28) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = cutoff.toLocaleDateString('en-CA', { timeZone: TZ });
-  return records.filter((r) => (r.localDate || r.date) >= cutoffStr);
-}
-
 function isEnduranceType(type) {
   const t = (type || '').toLowerCase();
-  return /run|zone|walking|cycling|cardio|jog/i.test(t) && !/strength|full body|gym|flexibility|climbing/i.test(t);
+  return /run|zone|walking|cycling|cardio|jog|swim|rowing|elliptical|stair|hike/i.test(t) && !/strength|full body|gym|flexibility/i.test(t);
 }
 
 function isStrengthType(type) {
   const t = (type || '').toLowerCase();
-  return /strength|full body|gym|flexibility|climbing|hypertrophy/i.test(t);
+  return /strength|full body|gym|hypertrophy|pilates|barre|core|crossfit|functional/i.test(t);
+}
+
+function isActivitiesType(type) {
+  const t = (type || '').toLowerCase();
+  return /volleyball|padel|pickleball|bouldern|climbing|sport|recreation|soccer|basketball|tennis|kickboxing|boxing|ski|snowboard|surf|skate|dance|martial/i.test(t) && !/strength|run|zone|walking|cycling|cardio|jog/i.test(t);
 }
 
 function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
@@ -90,6 +65,10 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
   let runDuration = 0;
   let strengthCount = 0;
   let strengthDuration = 0;
+  let activitiesCount = 0;
+  let activitiesDuration = 0;
+  let activeRecoveryCount = 0;
+  let activeRecoveryDuration = 0;
 
   for (const w of workoutsRecent) {
     const type = (w.workout_type || w.workoutType || w.type || 'Other').trim();
@@ -104,6 +83,12 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
     } else if (isStrengthType(type)) {
       strengthCount++;
       strengthDuration += dur;
+    } else if (isActivitiesType(type)) {
+      activitiesCount++;
+      activitiesDuration += dur;
+    } else if (isActiveRecoveryType(type)) {
+      activeRecoveryCount++;
+      activeRecoveryDuration += dur;
     }
   }
 
@@ -145,9 +130,11 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
 
   const hasEnoughWorkouts = workoutsRecent.length >= 4;
   const hasEnoughSleep = sleepTotals.length >= 7;
+  const hasActivities = activitiesCount > 0 || activeRecoveryCount > 0;
   const confidence = {
     endurance: hasEnoughWorkouts && runCount > 0 ? 'high' : runCount > 0 ? 'moderate' : 'low',
     strength: hasEnoughWorkouts && strengthCount > 0 ? 'high' : strengthCount > 0 ? 'moderate' : 'low',
+    activities: hasActivities ? 'high' : 'low',
     sleep: hasEnoughSleep ? 'high' : sleepTotals.length > 0 ? 'moderate' : 'low',
     overall: hasEnoughWorkouts || hasEnoughSleep ? 'moderate' : 'low',
   };
@@ -170,6 +157,16 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
         sessionsLast28Days: strengthCount,
         sessionsPerWeek: Math.round(strengthPerWeek * 10) / 10,
         totalMinutesLast28Days: Math.round(strengthDuration),
+      },
+      activities: {
+        sessionsLast28Days: activitiesCount,
+        sessionsPerWeek: Math.round((activitiesCount / 4) * 10) / 10,
+        totalMinutesLast28Days: Math.round(activitiesDuration),
+      },
+      activeRecovery: {
+        sessionsLast28Days: activeRecoveryCount,
+        sessionsPerWeek: Math.round((activeRecoveryCount / 4) * 10) / 10,
+        totalMinutesLast28Days: Math.round(activeRecoveryDuration),
       },
       sleep: {
         avgTotalMinutes: Math.round(avgSleep) || null,
@@ -197,6 +194,8 @@ function buildProfileFromSalvor(workouts, sleep, vitals, activity, scores) {
       workoutsPerWeek: Math.round(workoutsPerWeek * 10) / 10,
       runsPerWeek: Math.round(runsPerWeek * 10) / 10,
       strengthCount,
+      activitiesCount,
+      activeRecoveryCount,
       cardioCount,
       byType: Object.entries(byType).reduce((a, [k, v]) => ({ ...a, [k]: v }), {}),
       totalDurationMinutes: Math.round(totalDuration),
@@ -218,7 +217,7 @@ function buildProfileFromIntake(intake) {
   const now = new Date();
   return {
     dataQuality: 'manual',
-    confidence: { endurance: 'low', strength: 'low', sleep: 'low', overall: 'low' },
+    confidence: { endurance: 'low', strength: 'low', activities: 'low', sleep: 'low', overall: 'low' },
     version: 2,
     generatedAt: now.toISOString(),
     timeZone: TZ,
@@ -235,6 +234,16 @@ function buildProfileFromIntake(intake) {
         sessionsPerWeek: baseline.strengthFrequencyPerWeek ?? 2,
         totalMinutesLast28Days: (baseline.strengthFrequencyPerWeek ?? 2) * 4 * (baseline.longestStrengthSessionMinutes ?? 60),
       },
+      activities: {
+        sessionsLast28Days: 0,
+        sessionsPerWeek: 0,
+        totalMinutesLast28Days: 0,
+      },
+      activeRecovery: {
+        sessionsLast28Days: 0,
+        sessionsPerWeek: 0,
+        totalMinutesLast28Days: 0,
+      },
       sleep: { avgTotalMinutes: null, avgDeepMinutes: null, avgRemMinutes: null, lastNight: null, deficit: false, sampleSize: 0 },
       body: { weightKg: null, restingHeartRateBpm: null },
     },
@@ -244,6 +253,8 @@ function buildProfileFromIntake(intake) {
       workoutsPerWeek: (baseline.runningFrequencyPerWeek ?? 2) + (baseline.strengthFrequencyPerWeek ?? 2),
       runsPerWeek: baseline.runningFrequencyPerWeek ?? 2,
       strengthCount: (baseline.strengthFrequencyPerWeek ?? 2) * 4,
+      activitiesCount: 0,
+      activeRecoveryCount: 0,
       cardioCount: (baseline.runningFrequencyPerWeek ?? 2) * 4,
       byType: {},
       totalDurationMinutes: 0,

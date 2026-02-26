@@ -16,10 +16,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getWorkspace, getCoachRoot, loadJson, loadJsonlFiles } = require('../lib/cache-io');
 
-const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
-const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
-const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
+const WORKSPACE = getWorkspace();
+const COACH_ROOT = getCoachRoot();
 const CALENDAR_FILE = path.join(COACH_ROOT, 'workout_calendar.json');
 const ADAPTATION_LOG = path.join(COACH_ROOT, 'adaptation_log.jsonl');
 const TZ = 'Europe/Berlin';
@@ -45,30 +45,7 @@ const MISSED_RULES = {
   Brick: { status: 'missed', ruleRefs: ['RULE_TRIATHLON_MISSED_SWAP'], evidenceRefs: ['SRC003'] },
 };
 
-function loadJson(p) {
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
 const { isDateInStatusBlock } = require('../lib/status-helper');
-
-function loadJsonlFiles(prefix) {
-  const out = [];
-  if (!fs.existsSync(CACHE_DIR)) return out;
-  const files = fs.readdirSync(CACHE_DIR).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl'));
-  for (const f of files.sort()) {
-    const lines = fs.readFileSync(path.join(CACHE_DIR, f), 'utf8').trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        out.push(JSON.parse(line));
-      } catch (_) {}
-    }
-  }
-  return out;
-}
 
 function appendAdaptation(event) {
   fs.appendFileSync(ADAPTATION_LOG, JSON.stringify(event) + '\n', 'utf8');

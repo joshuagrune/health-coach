@@ -8,35 +8,11 @@
  *   node pace-at-hr-trend.js [--hr-min 130] [--hr-max 150] [--days 180] [--period week|month] [--summary]
  */
 
-const fs = require('fs');
 const path = require('path');
+const { getWorkspace, getCoachRoot, loadJsonlFiles, getRecent, TZ } = require('../lib/cache-io');
 
-const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
-const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
-const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
-const TZ = 'Europe/Berlin';
-
-function loadJsonlFiles(prefix) {
-  const out = [];
-  if (!fs.existsSync(CACHE_DIR)) return out;
-  const files = fs.readdirSync(CACHE_DIR).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl'));
-  for (const f of files.sort()) {
-    const lines = fs.readFileSync(path.join(CACHE_DIR, f), 'utf8').trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        out.push(JSON.parse(line));
-      } catch (_) {}
-    }
-  }
-  return out;
-}
-
-function getRecent(records, days) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = cutoff.toLocaleDateString('en-CA', { timeZone: TZ });
-  return records.filter((r) => (r.localDate || r.date) >= cutoffStr);
-}
+const WORKSPACE = getWorkspace();
+const COACH_ROOT = getCoachRoot();
 
 function formatPacePerKm(secondsPerKm) {
   if (secondsPerKm == null || !Number.isFinite(secondsPerKm)) return null;

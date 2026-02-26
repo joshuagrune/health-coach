@@ -11,7 +11,7 @@ All scripts use `OPENCLAW_WORKSPACE` (default `~/.openclaw/workspace`) for data 
 | **plan/** | profile-builder.js, plan-generator.js, health-notifier.js, adaptive-replanner.js |
 | **calendar/** | calendar-publish.js, calendar-reconcile.js |
 | **status/** | status-writer.js |
-| **lib/** | intake-validation.js, status-helper.js (shared) |
+| **lib/** | cache-io.js (loadJson, loadJsonlFiles, getRecent), intake-validation.js, status-helper.js, goal-progress.js |
 | **analysis/** | workout-analysis, workout-volume-trend, pace-at-hr-trend, sleep-trend, weekly-summary, load-management, running-form-trend, vitals-trend |
 | **validate/** | validate-health-coach.js, run-scenario-tests.js |
 
