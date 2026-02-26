@@ -40,6 +40,7 @@
     "strengthFrequencyPerWeek": 2,
     "longestStrengthSessionMinutes": 60,
     "strengthSplitPreference": "full_body",
+    "z2DurationMinutes": null,
     "injuryHistory": [],
     "perceivedFitness": "moderate",
     "perceivedStrength": "moderate",

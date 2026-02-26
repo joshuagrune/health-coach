@@ -34,26 +34,49 @@ function main() {
   const summary = args.includes('--summary');
   const typeFilter = (args.find((a) => a.startsWith('--type=')) || '').slice(7) || (args.includes('--type') && args[args.indexOf('--type') + 1] ? args[args.indexOf('--type') + 1] : null);
 
-  const workouts = loadJsonlFiles('workouts_');
-  let recent = getRecent(workouts, days);
-  if (typeFilter) recent = recent.filter((w) => (w.workout_type || w.workoutType || w.type || '') === typeFilter);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
 
-  const loads = dailyLoads(recent);
-  const dates = Object.keys(loads).sort();
-  if (dates.length < 7) {
-    const out = { generatedAt: new Date().toISOString(), error: 'Insufficient data (need 7+ days)', ratio: null };
-    console.log(summary ? JSON.stringify(out, null, 2) : JSON.stringify(out));
-    return;
+  // Prefer Salvor EWMA when available (Williams et al. 2017: more sensitive than rolling avg)
+  const scores = loadJsonlFiles('scores_');
+  const latestScore = scores
+    .filter((s) => (s.localDate || s.date) <= today)
+    .sort((a, b) => (b.localDate || b.date).localeCompare(a.localDate || a.date))
+    .find((s) => s.training_load?.acute_load != null && s.training_load?.chronic_load != null);
+
+  let acuteLoad;
+  let chronicLoad;
+  let ratio;
+  let source = 'computed';
+  let acuteDates = [];
+  let chronicDates = [];
+
+  if (latestScore?.training_load) {
+    acuteLoad = latestScore.training_load.acute_load;
+    chronicLoad = latestScore.training_load.chronic_load;
+    ratio = chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
+    source = latestScore.training_load.method === 'ewma' ? 'salvor_ewma' : 'salvor';
+  } else {
+    const workouts = loadJsonlFiles('workouts_');
+    let recent = getRecent(workouts, days);
+    if (typeFilter) recent = recent.filter((w) => (w.workout_type || w.workoutType || w.type || '') === typeFilter);
+
+    const loads = dailyLoads(recent);
+    const dates = Object.keys(loads).sort();
+    if (dates.length < 7) {
+      const out = { generatedAt: new Date().toISOString(), error: 'Insufficient data (need 7+ days)', ratio: null };
+      console.log(summary ? JSON.stringify(out, null, 2) : JSON.stringify(out));
+      return;
+    }
+
+    acuteDates = dates.filter((d) => d <= today).slice(-7);
+    chronicDates = dates.filter((d) => d <= today).slice(-28);
+
+    acuteLoad = acuteDates.reduce((a, d) => a + (loads[d] || 0), 0);
+    chronicLoad = chronicDates.reduce((a, d) => a + (loads[d] || 0), 0) / 4;
+
+    ratio = chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
   }
 
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
-  const acuteDates = dates.filter((d) => d <= today).slice(-7);
-  const chronicDates = dates.filter((d) => d <= today).slice(-28);
-
-  const acuteLoad = acuteDates.reduce((a, d) => a + (loads[d] || 0), 0);
-  const chronicLoad = chronicDates.reduce((a, d) => a + (loads[d] || 0), 0) / 4;
-
-  const ratio = chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
   let risk = 'unknown';
   if (ratio != null) {
     if (ratio > 2.0) risk = 'high';
@@ -66,16 +89,20 @@ function main() {
     generatedAt: new Date().toISOString(),
     days,
     typeFilter: typeFilter || 'all',
+    source,
     acuteLoad: Math.round(acuteLoad * 10) / 10,
     chronicLoad: Math.round(chronicLoad * 10) / 10,
     ratio,
     risk,
-    acutePeriod: acuteDates[0] + ' to ' + acuteDates[acuteDates.length - 1],
-    chronicPeriod: chronicDates[0] + ' to ' + chronicDates[chronicDates.length - 1],
+    acutePeriod: acuteDates.length ? acuteDates[0] + ' to ' + acuteDates[acuteDates.length - 1] : null,
+    chronicPeriod: chronicDates.length ? chronicDates[0] + ' to ' + chronicDates[chronicDates.length - 1] : null,
+    monotony: latestScore?.training_load?.monotony ?? null,
+    strain: latestScore?.training_load?.strain ?? null,
   };
 
   if (summary) {
     console.log('\n=== Load Management (Acute:Chronic) ===\n');
+    console.log('Source: ' + result.source + (result.source.includes('salvor') ? ' (EWMA)' : ' (calendar-based)'));
     console.log('Load = intensity-weighted (HR zones, effort_score, or duration)');
     console.log('Acute (7d):  ' + result.acuteLoad);
     console.log('Chronic (28d Ø): ' + result.chronicLoad);

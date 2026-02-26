@@ -101,6 +101,14 @@ function validateIntakeV3(payload, opts = {}) {
     errors.push(`Invalid strengthSplitPreference: ${baseline.strengthSplitPreference}. Valid: ${VALID_STRENGTH_SPLITS.join(', ')}`);
   }
 
+  // z2DurationMinutes: optional override for Zone 2 session length (20–120 min)
+  if (baseline.z2DurationMinutes != null) {
+    const n = Number(baseline.z2DurationMinutes);
+    if (isNaN(n) || n < 20 || n > 120) {
+      errors.push('baseline.z2DurationMinutes must be between 20 and 120 minutes.');
+    }
+  }
+
   // Inconsistent: fixed appointments on preferredRestDays is allowed but may reduce slots
   // No hard error; planner will handle.
 

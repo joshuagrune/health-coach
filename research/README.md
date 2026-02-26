@@ -34,3 +34,4 @@ This folder documents the scientific background for the Health Coach planning ru
 | `flexibility_mobility_evidence.md` | Stretching, ROM, foam rolling |
 | `sleep_recovery_evidence.md` | Sleep hygiene, napping, SWS, recovery |
 | `salvor_data_quality_and_limits.md` | API data quality, normalization |
+| `salvor_recommendations.md` | Salvor → Health Coach: EWMA, monotony, API-Nutzung |

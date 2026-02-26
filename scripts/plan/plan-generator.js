@@ -172,7 +172,7 @@ function isHardWorkout(w) {
   return false;
 }
 
-function collectRecentSignals(workouts, today) {
+function collectRecentSignals(workouts, today, scores = null) {
   const normalized = workouts.map(normalizeWorkout).filter((w) => !!w.localDate);
   const recent = normalized.filter((w) => {
     const delta = diffDays(today, w.localDate);
@@ -196,9 +196,24 @@ function collectRecentSignals(workouts, today) {
   const yesterday = addDays(today, -1);
   const yesterdayHard = hardDates.has(yesterday);
   const trainedToday = completedDates.has(today);
-  const acwr = computeACWR(workouts, today);
+
+  // Prefer Salvor EWMA ratio when available (Williams et al. 2017: more sensitive than rolling avg)
+  let acwr = null;
+  let acwrSource = null;
+  if (scores && scores.length > 0) {
+    const byDate = scores
+      .filter((s) => (s.localDate || s.date) <= today)
+      .sort((a, b) => (b.localDate || b.date).localeCompare(a.localDate || a.date));
+    const latest = byDate.find((s) => s.training_load?.ratio != null);
+    if (latest?.training_load?.ratio != null) {
+      acwr = latest.training_load.ratio;
+      acwrSource = latest.training_load.method === 'ewma' ? 'salvor_ewma' : 'salvor';
+    }
+  }
+  if (acwr == null) acwr = computeACWR(workouts, today);
 
   return {
+    acwrSource: acwrSource || 'computed',
     totalMinutes,
     hardCount,
     hardDates,
@@ -297,11 +312,14 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
     return !existing.some((e) => e.dateStr === prev || e.dateStr === next);
   });
 
+  // Strength session duration scales with baseline, capped at maxMinutes.
   // During deload: reduce volume (fewer sets, higher rep range at lower load)
   // rather than skipping strength entirely — maintains neuromuscular stimulus.
+  const strengthAnchor = intake.baseline?.longestStrengthSessionMinutes ?? 60;
+  const strengthBase   = Math.max(20, Math.min(strengthAnchor, 90));
   const strengthTargets = targets.deload
-    ? { durationMinutes: Math.min(40, maxMinutes), setsReps: '2x12-15', intensity: 'light' }
-    : { durationMinutes: Math.min(60, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' };
+    ? { durationMinutes: Math.min(Math.round(strengthBase * 0.67), maxMinutes), setsReps: '2x12-15', intensity: 'light' }
+    : { durationMinutes: Math.min(strengthBase, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' };
 
   return chosen.map((slot, i) => createSession({
     id: `sess_strength_1_${slot.dateStr}_str_${i}`,
@@ -316,20 +334,39 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
   }));
 }
 
-function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload) {
+function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, maxMinutes, endurancePerWeek) {
   const specs = [];
   const isOddWeek = weekSeed % 2 === 1;
 
-  const lrDuration = deload ? 55 : 70;
+  // LR duration anchored to baseline, capped at maxMinutes.
+  // Deload applies the same 0.55 factor as other hard sessions.
+  const lrAnchorFull = Math.max(30, Math.min(baseline?.longestRecentRunMinutes ?? 70, 150));
+  const lrDuration = Math.min(maxMinutes, Math.round(lrAnchorFull * (deload ? 0.55 : 1.0)));
   specs.push({ kind: 'LR', title: 'Long Run', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: lrDuration, intensity: 'easy' }, ruleRefs: ['RULE_KEY_WORKOUT_PRIORITY'] });
 
-  specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: deload ? 35 : 45, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+  // Z2 duration per session scales with weekly volume and training frequency.
+  // More Z2 sessions per week → shorter each (total volume stays proportional).
+  // All Z2 sessions get the same duration — no arbitrary primary/secondary split.
+  // Explicit baseline.z2DurationMinutes overrides the formula.
+  // Z2 uses a lighter deload factor (0.75) than hard sessions (0.55) — preserving
+  // aerobic stimulus during deload (Bosquet & Mujika 2012).
+  const Z2_DELOAD_FACTOR = 0.75;
+  // z2Count = planned endurance sessions minus LR and quality session
+  const z2Count = Math.max(1, (endurancePerWeek || 2) - 2);
+  const z2Duration = Math.min(maxMinutes, Math.round(
+    ((baseline?.z2DurationMinutes > 0)
+      ? baseline.z2DurationMinutes
+      : Math.max(20, Math.min(Math.round(lrAnchorFull * 1.3 / z2Count), 80)))
+    * (deload ? Z2_DELOAD_FACTOR : 1.0)
+  ));
+
+  specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
   if (isOddWeek) {
     specs.push({ kind: 'Intervals', title: 'Intervals (5K pace)', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 35, workBouts: '6x1min', recovery: '1min jog', intensity: 'VO2max' }, ruleRefs: ['RULE_HIIT_FREQUENCY'] });
   } else {
     specs.push({ kind: 'Tempo', title: 'Tempo', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 30, intensity: 'threshold' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
   }
-  specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: deload ? 30 : 40, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+  specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
 
   if (enduranceMilestone?.subKind && /triathlon|cycling/.test(enduranceMilestone.subKind)) {
     specs[0].title = 'Long Endurance';
@@ -338,13 +375,13 @@ function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload) {
   return specs;
 }
 
-function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals, maxMinutes }) {
+function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals, maxMinutes, baseline }) {
   const sessions = [];
   const usedDates = new Set();
   const usedHardDates = new Set();
   const weekSeed = Math.floor(new Date(slots[0]?.dateStr || new Date().toISOString().slice(0, 10)).getTime() / (7 * 24 * 60 * 60 * 1000));
 
-  const specs = buildEnduranceSpecs(enduranceMilestone, weekSeed, targets.deload);
+  const specs = buildEnduranceSpecs(enduranceMilestone, weekSeed, targets.deload, baseline, maxMinutes, targets.endurancePerWeek);
   const desired = Math.min(targets.endurancePerWeek, slots.length);
   let created = 0;
 
@@ -471,7 +508,7 @@ function buildRecommendations(goals, targets) {
   return recs;
 }
 
-function orchestrate(intake, profile, workouts, today, constraints) {
+function orchestrate(intake, profile, workouts, today, constraints, scores = null) {
   const { hasEndurance, hasStrength, hasGeneral, enduranceMilestone } = resolveGoals(intake);
   const mode = hasEndurance && hasStrength ? 'hybrid'
     : hasEndurance ? 'endurance_only'
@@ -479,7 +516,7 @@ function orchestrate(intake, profile, workouts, today, constraints) {
         : 'strength_only';
 
   const maxMinutes = constraints.maxMinutesPerDay || 90;
-  const recentSignals = collectRecentSignals(workouts, today);
+  const recentSignals = collectRecentSignals(workouts, today, scores);
   const slots = buildRollingSlots(today, constraints).filter((s) => !recentSignals.completedDates.has(s.dateStr));
   const targets = estimateTargets(intake, profile, mode, recentSignals);
   const hardDatesForPlanning = new Set(recentSignals.hardDates);
@@ -488,10 +525,12 @@ function orchestrate(intake, profile, workouts, today, constraints) {
 
   let sessions = [];
 
+  const baseline = intake.baseline || {};
+
   if (mode === 'strength_only') {
     sessions = buildStrengthSessions({ intake, targets, slots, maxMinutes, recentHardDates: planningSignals.hardDates });
   } else if (mode === 'endurance_only') {
-    sessions = buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals: planningSignals, maxMinutes });
+    sessions = buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals: planningSignals, maxMinutes, baseline });
   } else {
     const enduranceSlots = slots.filter((s, i) => i % 2 === 0);
     const strengthSlots = slots.filter((s, i) => i % 2 === 1);
@@ -502,6 +541,7 @@ function orchestrate(intake, profile, workouts, today, constraints) {
       slots: enduranceSlots.length ? enduranceSlots : slots,
       recentSignals: planningSignals,
       maxMinutes,
+      baseline,
     });
     const strengthSessions = buildStrengthSessions({
       intake,
@@ -532,6 +572,7 @@ function orchestrate(intake, profile, workouts, today, constraints) {
       hardSessions: recentSignals.hardCount,
       yesterdayHard: recentSignals.yesterdayHard,
       acwr: recentSignals.acwr,
+      acwrSource: recentSignals.acwrSource,
     },
   };
 
@@ -548,6 +589,7 @@ function main() {
   const intake = loadJson(INTAKE_FILE);
   const profile = loadJson(PROFILE_FILE);
   const workoutsRaw = loadJsonlFiles('workouts_');
+  const scoresRaw = loadJsonlFiles('scores_');
 
   if (!intake) {
     console.error('INTAKE: intake.json missing. Run onboarding first.');
@@ -563,7 +605,7 @@ function main() {
 
   const constraints = intake.constraints || {};
   const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
-  const { sessions, recommendations, blueprint } = orchestrate(intake, profile, workoutsRaw, today, constraints);
+  const { sessions, recommendations, blueprint } = orchestrate(intake, profile, workoutsRaw, today, constraints, scoresRaw);
 
   const historyWorkouts = workoutsRaw.map((w) => ({
     id: (typeof w.id === 'string' && w.id.startsWith('salvor:')) ? w.id : `salvor:${w.id}`,
