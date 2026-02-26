@@ -1,50 +1,29 @@
 #!/usr/bin/env node
 /**
  * Load management: Acute:Chronic Load Ratio for injury risk.
- * Acute = last 7 days load (duration-weighted), Chronic = 28-day rolling avg.
+ * Acute = last 7 days load (intensity-weighted: HR zones, effort_score, or duration), Chronic = 28-day rolling avg.
  * Ratio 1.0-1.5 = safe, >1.5 = elevated risk, >2.0 = high risk.
  *
  * Usage:
  *   node load-management.js [--days 35] [--summary]
  */
 
-const fs = require('fs');
 const path = require('path');
+const { getWorkspace, getCoachRoot, loadJsonlFiles, getRecent, TZ } = require('../lib/cache-io');
+const { shouldExcludeFromLoad, computeWorkoutLoad } = require('../lib/workout-utils');
 
-const WORKSPACE = process.env.OPENCLAW_WORKSPACE || path.join(process.env.HOME || '/root', '.openclaw/workspace');
-const COACH_ROOT = path.join(WORKSPACE, 'health', 'coach');
-const CACHE_DIR = path.join(COACH_ROOT, 'salvor_cache');
-const TZ = 'Europe/Berlin';
-
-function loadJsonlFiles(prefix) {
-  const out = [];
-  if (!fs.existsSync(CACHE_DIR)) return out;
-  const files = fs.readdirSync(CACHE_DIR).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl'));
-  for (const f of files.sort()) {
-    const lines = fs.readFileSync(path.join(CACHE_DIR, f), 'utf8').trim().split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        out.push(JSON.parse(line));
-      } catch (_) {}
-    }
-  }
-  return out;
-}
-
-function getRecent(records, days) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = cutoff.toLocaleDateString('en-CA', { timeZone: TZ });
-  return records.filter((r) => (r.localDate || r.date) >= cutoffStr);
-}
+const WORKSPACE = getWorkspace();
+const COACH_ROOT = getCoachRoot();
 
 function dailyLoads(workouts) {
   const byDate = {};
   for (const w of workouts) {
+    const type = w.workout_type || w.workoutType || w.type || '';
+    if (shouldExcludeFromLoad(w)) continue; // low-intensity active recovery excluded; intense yoga counts
     const d = w.localDate || w.date;
     if (!d) continue;
-    const dur = (w.duration_seconds ?? w.durationSeconds ?? 0) / 60;
-    byDate[d] = (byDate[d] || 0) + dur;
+    const load = computeWorkoutLoad(w); // intensity-weighted: HR zones, effort_score, or duration
+    byDate[d] = (byDate[d] || 0) + load;
   }
   return byDate;
 }
@@ -87,8 +66,8 @@ function main() {
     generatedAt: new Date().toISOString(),
     days,
     typeFilter: typeFilter || 'all',
-    acuteLoadMinutes: Math.round(acuteLoad * 10) / 10,
-    chronicLoadMinutes: Math.round(chronicLoad * 10) / 10,
+    acuteLoad: Math.round(acuteLoad * 10) / 10,
+    chronicLoad: Math.round(chronicLoad * 10) / 10,
     ratio,
     risk,
     acutePeriod: acuteDates[0] + ' to ' + acuteDates[acuteDates.length - 1],
@@ -97,8 +76,9 @@ function main() {
 
   if (summary) {
     console.log('\n=== Load Management (Acute:Chronic) ===\n');
-    console.log('Acute (7d):  ' + result.acuteLoadMinutes + ' min');
-    console.log('Chronic (28d Ø): ' + result.chronicLoadMinutes + ' min');
+    console.log('Load = intensity-weighted (HR zones, effort_score, or duration)');
+    console.log('Acute (7d):  ' + result.acuteLoad);
+    console.log('Chronic (28d Ø): ' + result.chronicLoad);
     console.log('Ratio: ' + result.ratio + '  →  ' + result.risk);
     console.log('\n1.0-1.5 = safe | >1.5 = elevated risk | >2.0 = high risk\n');
   } else {
