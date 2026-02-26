@@ -102,13 +102,23 @@ function computeACWR(workouts, todayStr) {
     byDate[d] = (byDate[d] || 0) + load;
   }
 
-  const dates = Object.keys(byDate).sort().filter((d) => d <= todayStr);
-  if (dates.length < 7) return null;
+  // Build calendar-based windows (rest days = 0) so that recovery days
+  // actually reduce acute load — matches Gabbett 2016 methodology.
+  const calendarDay = (offsetFromToday) => {
+    const d = new Date(todayStr + 'T12:00:00');
+    d.setDate(d.getDate() + offsetFromToday);
+    return d.toISOString().slice(0, 10);
+  };
 
-  const acuteDates = dates.slice(-7);
-  const chronicDates = dates.slice(-28);
-  const acuteLoad = acuteDates.reduce((a, d) => a + (byDate[d] || 0), 0);
-  const chronicLoad = chronicDates.reduce((a, d) => a + (byDate[d] || 0), 0) / 4;
+  const acuteDays = Array.from({ length: 7 }, (_, i) => calendarDay(-(6 - i)));
+  const chronicDays = Array.from({ length: 28 }, (_, i) => calendarDay(-(27 - i)));
+
+  // Need at least some training data in the chronic window to be meaningful.
+  const hasData = chronicDays.some((d) => byDate[d] != null);
+  if (!hasData) return null;
+
+  const acuteLoad = acuteDays.reduce((a, d) => a + (byDate[d] || 0), 0);
+  const chronicLoad = chronicDays.reduce((a, d) => a + (byDate[d] || 0), 0) / 4;
 
   return chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
 }

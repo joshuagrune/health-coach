@@ -78,11 +78,12 @@
 
 ### ACWR (computeACWR)
 
-- **Acute:** Last 7 days intensity-weighted load.
-- **Chronic:** Last 28 days load / 4 (rolling average).
+- **Acute:** Last 7 calendar days intensity-weighted load (rest days = 0).
+- **Chronic:** Last 28 calendar days load / 4 (rolling average; rest days = 0).
+- **Calendar-based windows:** Matches Gabbett 2016 methodology — rest days reduce acute load, so recovery actually lowers ACWR.
 - **Thresholds:** <0.8 detraining | 0.8–1.3 safe | 1.3–1.5 elevated | >1.5 high risk.
 - **Deload trigger:** ACWR > 1.3 (conservative; Gabbett 2016 [SRC004], Hulin [SRC005]; Zouhal 2021 [SRC009] notes use as heuristic).
-- **Fallback** when <28d history: volume >600 min/week or (≥4 hard sessions AND >480 min).
+- **Fallback** when no chronic data available: volume >600 min/week or (≥4 hard sessions AND >480 min).
 
 ### Deload volume reduction
 
