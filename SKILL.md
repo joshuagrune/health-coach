@@ -35,7 +35,7 @@ All user-facing scheduling uses **CET / Europe/Berlin**. Store timestamps in UTC
 - **Coach root**: `workspace/health/coach/`
 - **Salvor cache**: `workspace/health/coach/salvor_cache/` (workouts, sleep, vitals, activity, scores)
 - **Derived**: `intake.json`, `profile.json`, `workout_calendar.json`, `adaptation_log.jsonl`
-- **Rolling summaries**: `workspace/current/health_profile_summary.json`, `workspace/current/training_plan_week.json`, `workspace/current/health_weekly_summary.json`
+- **Rolling summaries**: `workspace/current/health_profile_summary.json`, `workspace/current/training_plan_week.json`, `workspace/current/health_weekly_summary.json`, `workspace/current/weather_forecast.json` (optional, von weather skill)
 
 ## Assessment-First Flow (MANDATORY)
 

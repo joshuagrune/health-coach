@@ -41,6 +41,8 @@ Add to `~/.openclaw/openclaw.json`:
 
 **Calendar publish** requires `SPORT_CALENDAR_ID` (your khal calendar ID). Set in env or `workspace/.env`. Never commit this value.
 
+Wetter kann für Outdoor-Workouts berücksichtigt werden – bei vorhandener `current/weather_forecast.json` (weather skill: `~/.openclaw/skills/weather/`).
+
 ## Assessment-First Flow
 
 On first use, the agent asks: "Should I sync and analyze your health data first (recommended)?" If yes and key exists, it runs `salvor-sync.js` then `profile-builder.js`. If no or key missing, it does manual intake and builds a profile from your answers.
@@ -106,24 +108,13 @@ These files are written by the cron jobs below. Run cron first so the agent has 
 
 ---
 
-## Cron Jobs (recommended)
-
-### OpenClaw Cron (preferred)
-
-If using OpenClaw's built-in cron (`~/.openclaw/cron/jobs.json`):
-
-- **health-coach-sync** (alle 15 Min): Salvor Full-Sync → Kalender → health-notifier (Workouts, Scores, Sleep → Telegram)
-- **health-coach-profile** (täglich 08:30): profile-builder.js
-
-Plan wird bei neuem Workout automatisch von health-coach-sync neu gebaut. Kein separater Weekly-Plan oder Daily-Replan mehr nötig.
-
-### System Crontab (alternative)
+## Cron Jobs (System Crontab)
 
 ```bash
 crontab -e
 ```
 
-**Alle 15 Min** — Sync + Kalender + Notifier (wenn kein OpenClaw-Cron):
+**Alle 15 Min** — Sync + Kalender + Notifier:
 
 ```
 */15 * * * * cd ~/.openclaw/workspace && node ~/.openclaw/skills/health-coach/scripts/sync/salvor-sync.js && node health/scripts/sync-workouts-and-calendar.js && node ~/.openclaw/skills/health-coach/scripts/plan/health-notifier.js
@@ -135,7 +126,9 @@ crontab -e
 30 8 * * * cd ~/.openclaw/workspace && node ~/.openclaw/skills/health-coach/scripts/plan/profile-builder.js
 ```
 
-Replace `~/.openclaw/workspace` with your actual path. Use `SALVOR_API_KEY` from env; avoid hardcoding in crontab.
+Replace `~/.openclaw/workspace` with your actual path. Use `SALVOR_API_KEY` from env or `workspace/.env`; avoid hardcoding in crontab.
+
+Plan wird bei neuem Workout automatisch vom Sync neu gebaut. Kein separater Weekly-Plan oder Daily-Replan nötig.
 
 ## Troubleshooting
 

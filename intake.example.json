@@ -26,8 +26,17 @@
     }
   ],
   "constraints": {
-    "daysAvailable": ["mo", "tu", "th", "fr", "sa"],
-    "preferredRestDays": ["wed", "sun"],
+    "daysAvailable": [
+      "mo",
+      "tu",
+      "th",
+      "fr",
+      "sa"
+    ],
+    "preferredRestDays": [
+      "wed",
+      "sun"
+    ],
     "maxMinutesPerDay": 90,
     "maxSessionsPerWeek": null,
     "gymAccess": true,
@@ -63,5 +72,6 @@
   "notes": [
     "Strength-only goals create strength-only plans (no auto Zone 2/cardio).",
     "If both endurance and strength goals are present, sessions stay separated by day in one calendar."
-  ]
+  ],
+  "trainingStartDate": "2026-02-22"
 }

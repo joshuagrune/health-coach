@@ -61,6 +61,76 @@ function isEnduranceKind(kind) {
   return ENDURANCE_KINDS.has(kind);
 }
 
+/**
+ * Count workouts/sessions of given modality in the rolling 7-day window [slotDate-6 .. slotDate].
+ * Used for per-slot frequency check — avoids blocking this week's plan with last week's workouts.
+ * @see SRC029 Hickson, SRC030 Wilson — interference effect; per-slot window correct for planning.
+ */
+function countModalityInWindow(slotDate, completedWorkouts, plannedSessions, modality) {
+  const windowStart = addDays(slotDate, -6);
+  const fromCompleted = completedWorkouts.filter((w) => {
+    const d = w.localDate || w.date;
+    if (!d || d < windowStart || d > slotDate) return false;
+    return workoutModalityClass(w.type || w.workout_type || w.workoutType) === modality;
+  }).length;
+  const fromPlanned = plannedSessions.filter((s) =>
+    s.localDate >= windowStart && s.localDate <= slotDate && s.modality === modality
+  ).length;
+  return fromCompleted + fromPlanned;
+}
+
+/**
+ * Count hard sessions/workouts in rolling 7-day window [slotDate-6 .. slotDate].
+ * Includes completed workouts and already planned sessions.
+ */
+function countHardInWindow(slotDate, completedWorkouts, plannedSessions) {
+  const windowStart = addDays(slotDate, -6);
+  const fromCompleted = completedWorkouts.filter((w) => {
+    const d = w.localDate || w.date;
+    if (!d || d < windowStart || d > slotDate) return false;
+    return isHardWorkout(w);
+  }).length;
+  const fromPlanned = plannedSessions.filter((s) =>
+    s.localDate >= windowStart && s.localDate <= slotDate && isHardKind(s.kind)
+  ).length;
+  return fromCompleted + fromPlanned;
+}
+
+/**
+ * For LR spec: prefer weekend slots (sa, su) first. Other specs: chronological order.
+ * @see SRC032 Issurin — block/concentration; LR on weekends maximizes recovery window.
+ */
+function sortSlotsForSpec(slots, spec) {
+  const WEEKEND = new Set(['sa', 'su']);
+  if (spec.kind === 'LR') {
+    return [...slots].sort((a, b) => {
+      const aW = WEEKEND.has(a.key) ? 0 : 1;
+      const bW = WEEKEND.has(b.key) ? 0 : 1;
+      return aW - bW || a.dateStr.localeCompare(b.dateStr);
+    });
+  }
+  // Tempo/Intervals: prefer end of week so middle days stay free for strength (non-adjacent to hard)
+  if ((spec.kind === 'Tempo' || spec.kind === 'Intervals') && spec.hardness === 'hard') {
+    return [...slots].sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+  }
+  return slots;
+}
+
+/**
+ * When placing endurance in hybrid mode, prefer the slot that leaves non-adjacent gaps
+ * for strength (so we can place 2+ hard strength sessions without back-to-back).
+ * Returns min gap in days between consecutive free slots — higher is better.
+ */
+function minGapBetweenFreeSlots(slots, usedDates, chosenDate) {
+  const free = slots.filter((s) => !usedDates.has(s.dateStr) && s.dateStr !== chosenDate).map((s) => s.dateStr).sort();
+  if (free.length < 2) return 0;
+  let minGap = 999;
+  for (let i = 0; i < free.length - 1; i++) {
+    const gap = diffDays(free[i + 1], free[i]);
+    if (gap < minGap) minGap = gap;
+  }
+  return minGap;
+}
 
 function resolveGoals(intake) {
   const goals = intake.goals || [];
@@ -101,6 +171,41 @@ function getFixedAppointmentSlots(constraints, startDate, endDate) {
   }
 
   return blocked;
+}
+
+/**
+ * Expand fixedAppointments to { localDate, title, kind, hardness } for the planning window.
+ * Used in training_plan_week.json for full-week visibility (Volleyball, etc.).
+ */
+function getFixedEventsInWindow(constraints, today, endDate) {
+  const fixedList = constraints?.fixedAppointments || [];
+  const start = new Date(today + 'T12:00:00');
+  const end = new Date((endDate || addDays(today, 6)) + 'T12:00:00');
+  const events = [];
+
+  for (const fa of fixedList) {
+    const dayKey = toDay2(fa.dayOfWeek || '');
+    if (!dayKey) continue;
+    const seasonStart = (fa.seasonStart || fa.startDate) ? new Date((fa.seasonStart || fa.startDate) + 'T12:00:00') : null;
+    const seasonEnd = (fa.seasonEnd || fa.endDate) ? new Date((fa.seasonEnd || fa.endDate) + 'T12:00:00') : null;
+    let cur = new Date(start.getTime());
+    while (cur <= end) {
+      const dateStr = cur.toLocaleDateString('en-CA', { timeZone: TZ });
+      if (getDayKey(dateStr) === dayKey && (!seasonStart || !seasonEnd || (cur >= seasonStart && cur <= seasonEnd))) {
+        const name = (fa.name || fa.id || 'Fixed').toLowerCase();
+        const hardness = /volleyball|soccer|basketball|handball|hockey|rugby|tennis|squash|boxing|martial/.test(name) ? 'hard' : 'medium';
+        events.push({
+          localDate: dateStr,
+          title: fa.name || fa.id || 'Fixed',
+          kind: 'FixedAppointment',
+          hardness,
+          source: 'intake.fixedAppointments',
+        });
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
+  return events.sort((a, b) => a.localDate.localeCompare(b.localDate));
 }
 
 function buildRollingSlots(today, constraints) {
@@ -216,15 +321,36 @@ function isVeryHardWorkout(w) {
 }
 
 /**
- * Derive max hard sessions per rolling 7-day window.
- * Explicit intake setting overrides fitness-based default.
- * Fitness levels: low=2, moderate=3, high=4, advanced=5.
+ * Derive max hard sessions per rolling 7-day window — dynamically modulated.
+ *
+ * Anchor: perceivedFitness → {low:2, moderate:3, high:4, advanced:5}
+ * Modifiers (all additive, result clamped to [1, 6]):
+ *   +1 if ACWR < 0.80  → undertrained, can absorb more load (Gabbett 2016)
+ *   −1 if ACWR > 1.25  → approaching danger zone
+ *   −1 if ≥2 very-hard sessions in last 7d → residual fatigue too high
+ *
+ * Readiness (today's HRV/sleep score) is intentionally NOT used here:
+ * it is a single-day acute signal with no predictive value beyond 24–48h.
+ * Readiness modulates only the first planned session via applyReadinessGating().
+ *
+ * Explicit intake.baseline.maxHardSessionsPerWeek overrides everything (manual override).
  */
-function deriveMaxHard(intake) {
+function deriveMaxHard(intake, recentSignals = null) {
   if (intake.baseline?.maxHardSessionsPerWeek != null) {
     return intake.baseline.maxHardSessionsPerWeek;
   }
-  return { low: 2, moderate: 3, high: 4, advanced: 5 }[intake.baseline?.perceivedFitness || 'moderate'] ?? 3;
+  const base = { low: 2, moderate: 3, high: 4, advanced: 5 }[intake.baseline?.perceivedFitness || 'moderate'] ?? 3;
+  if (!recentSignals) return base;
+
+  let cap = base;
+  const acwr = recentSignals.acwr;
+  if (acwr != null) {
+    if (acwr < 0.8)   cap += 1;
+    if (acwr > 1.25)  cap -= 1;
+  }
+  if ((recentSignals.veryHardDates?.size ?? 0) >= 2) cap -= 1;
+
+  return Math.max(1, Math.min(6, cap));
 }
 
 /**
@@ -235,8 +361,13 @@ function deriveMaxHard(intake) {
  * - Peak:  1 week before taper (highest LR)
  * - Build: ~35% of remaining weeks (quality + marathon pace)
  * - Base:  everything earlier (aerobic foundation)
+ *
+ * When trainingStartDate is provided, weeksIntoBase/weeksIntoBuild are derived
+ * from actual elapsed weeks since start (not from weeksToRace). This anchors
+ * the preparation and ensures correct progression even when the plan is
+ * regenerated multiple times per week.
  */
-function getMarathonPhase(raceDateStr, today) {
+function getMarathonPhase(raceDateStr, today, trainingStartDate = null) {
   if (!raceDateStr) return null;
   const daysToRace = diffDays(raceDateStr, today);
   if (daysToRace < 0) return { phase: 'post', weeksToRace: 0 };
@@ -256,12 +387,21 @@ function getMarathonPhase(raceDateStr, today) {
   const buildWeeks = Math.max(2, Math.round(remaining * 0.35));
   const baseWeeks  = remaining - buildWeeks;
 
+  // Elapsed weeks since training start (when provided); anchors weeksIntoBase/Build
+  const weeksSinceStart = trainingStartDate
+    ? Math.max(1, Math.floor(diffDays(today, trainingStartDate) / 7) + 1)
+    : null;
+
   if (weeksToRace <= TAPER_WEEKS + PEAK_WEEKS + buildWeeks) {
-    const weeksIntoBuild = (TAPER_WEEKS + PEAK_WEEKS + buildWeeks) - weeksToRace + 1;
+    const weeksIntoBuild = weeksSinceStart != null && weeksSinceStart > baseWeeks
+      ? Math.min(weeksSinceStart - baseWeeks, buildWeeks)
+      : (TAPER_WEEKS + PEAK_WEEKS + buildWeeks) - weeksToRace + 1;
     return { phase: 'build', weeksToRace, weeksIntoBuild, buildWeeks };
   }
 
-  const weeksIntoBase = baseWeeks - (weeksToRace - TAPER_WEEKS - PEAK_WEEKS - buildWeeks) + 1;
+  const weeksIntoBase = weeksSinceStart != null
+    ? Math.min(weeksSinceStart, baseWeeks)
+    : baseWeeks - (weeksToRace - TAPER_WEEKS - PEAK_WEEKS - buildWeeks) + 1;
   return { phase: 'base', weeksToRace, weeksIntoBase, baseWeeks };
 }
 
@@ -392,19 +532,23 @@ function collectRecentSignals(workouts, today, scores = null) {
   };
 }
 
-function estimateTargets(intake, profile, mode, recent) {
+function estimateTargets(intake, profile, mode, recent, marathonPhase = null) {
   const baseStrength = intake.baseline?.strengthFrequencyPerWeek
     ?? (profile?.workouts?.strengthCount != null ? Math.max(1, Math.ceil((profile.workouts.strengthCount || 0) / 4)) : 2);
   const baseEndurance = intake.baseline?.runningFrequencyPerWeek
     ?? (profile?.workouts?.runningCount != null ? Math.max(1, Math.ceil((profile.workouts.runningCount || 0) / 4)) : 3);
 
-  // Deload when ACWR > 1.3 (Gabbett 2016 conservative threshold) OR blunt
-  // volume/frequency signal as fallback when ACWR data is unavailable (<28d history).
-  // Thresholds: >600 min/week is high even for recreational athletes; >=4 hard
-  // sessions AND >480 min avoids false positives from high-frequency easy work.
+  // Deload triggers (Bompa: proactive scheduling + Gabbett: reactive ACWR):
+  // 1. ACWR > 1.3 (Gabbett 2016)
+  // 2. Volume fallback when ACWR unavailable: >600 min OR (>=4 hard AND >480 min)
+  // 3. Proactive: Base phase every 4th week; Build phase every 3rd week (higher intensity)
   const acwrHighLoad = recent.acwr != null ? recent.acwr > 1.3 : false;
   const volumeHighLoad = recent.acwr == null && (recent.totalMinutes > 600 || (recent.hardCount >= 4 && recent.totalMinutes > 480));
-  const highLoad = acwrHighLoad || volumeHighLoad;
+  const proactiveDeload = marathonPhase?.phase === 'base' && (marathonPhase.weeksIntoBase || 0) % 4 === 0
+    || marathonPhase?.phase === 'build' && (marathonPhase.weeksIntoBuild || 0) % 3 === 0;
+  const highLoad = acwrHighLoad || volumeHighLoad || proactiveDeload;
+  const deloadReason = acwrHighLoad ? 'acwr' : volumeHighLoad ? 'volume' : proactiveDeload ? 'scheduled' : null;
+
   // True deload: ~45% volume reduction (SRC013 Deload Delphi consensus)
   const deloadFactor = highLoad ? 0.55 : 1;
 
@@ -420,6 +564,7 @@ function estimateTargets(intake, profile, mode, recent) {
     strengthPerWeek,
     endurancePerWeek,
     deload: highLoad,
+    deloadReason,
     acwr: recent.acwr,
   };
 }
@@ -470,7 +615,7 @@ function pickSlots(slots, count, predicate) {
   return chosen;
 }
 
-function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDates = new Set(), recentHardDates = new Set(), recentVeryHardDates = new Set() }) {
+function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDates = new Set(), recentHardDates = new Set(), recentVeryHardDates = new Set(), completedWorkouts = [], strengthTarget, maxHardPerWeek = 3, marathonPhase = null, startIndex = 0 }) {
   const split = intake.baseline?.strengthSplitPreference || 'full_body';
   const splitTitles = {
     full_body: ['Full Body A', 'Full Body B'],
@@ -479,30 +624,49 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
     bro_split: ['Chest/Triceps', 'Back/Biceps', 'Legs', 'Shoulders'],
   };
   const titles = splitTitles[split] || splitTitles.full_body;
+  const modalityTarget = strengthTarget ?? targets.strengthPerWeek;
 
-  const chosen = pickSlots(slots, targets.strengthPerWeek, (slot, existing) => {
+  const chosen = [];
+  for (const slot of slots) {
+    if (chosen.length >= modalityTarget) break;
+    if (countModalityInWindow(slot.dateStr, completedWorkouts, chosen.map((s) => ({ localDate: s.dateStr, modality: 'strength' })), 'strength') >= modalityTarget) continue;
+    if (countHardInWindow(slot.dateStr, completedWorkouts, chosen.map((s) => ({ localDate: s.dateStr, kind: 'Strength' }))) >= maxHardPerWeek) continue;
+    const localHard = new Set(chosen.map((s) => s.dateStr));
+    for (const d of avoidHardDates) localHard.add(d);
+    if (!canPlaceHardOnDate(slot.dateStr, localHard, recentHardDates, recentVeryHardDates)) continue;
     const prev = addDays(slot.dateStr, -1);
     const next = addDays(slot.dateStr, 1);
-    const localHard = new Set(existing.map((e) => e.dateStr));
-    for (const d of avoidHardDates) localHard.add(d);
-    if (!canPlaceHardOnDate(slot.dateStr, localHard, recentHardDates, recentVeryHardDates)) return false;
-    return !existing.some((e) => e.dateStr === prev || e.dateStr === next);
-  });
+    if (chosen.some((e) => e.dateStr === prev || e.dateStr === next)) continue;
+    chosen.push(slot);
+  }
 
-  // Strength session duration scales with baseline, capped at maxMinutes.
-  // During deload: reduce volume (fewer sets, higher rep range at lower load)
-  // rather than skipping strength entirely — maintains neuromuscular stimulus.
+  // Phase-dependent strength periodization (Bompa, Issurin):
+  // Base: Hypertrophie | Build: Maximalkraft | Peak: Power/Erhalt | Taper: Erhalt, kein neuer Reiz
+  // Deload overrides: light, 2×12–15
   const strengthAnchor = intake.baseline?.longestStrengthSessionMinutes ?? 60;
-  const strengthBase   = Math.max(20, Math.min(strengthAnchor, 90));
-  const strengthTargets = targets.deload
-    ? { durationMinutes: Math.min(Math.round(strengthBase * 0.67), maxMinutes), setsReps: '2x12-15', intensity: 'light' }
-    : { durationMinutes: Math.min(strengthBase, maxMinutes), setsReps: '3x8-12', intensity: 'moderate' };
+  const strengthBase = Math.max(20, Math.min(strengthAnchor, 90));
+  const phase = marathonPhase?.phase ?? null;
+
+  let strengthTargets;
+  if (targets.deload) {
+    strengthTargets = { durationMinutes: Math.min(Math.round(strengthBase * 0.67), maxMinutes), setsReps: '2x12-15', intensity: 'light' };
+  } else if (phase === 'taper' || phase === 'peak') {
+    const cap = Math.round(maxMinutes * 0.7);
+    strengthTargets = phase === 'taper'
+      ? { durationMinutes: Math.min(Math.round(strengthBase * 0.6), cap), setsReps: '2x8-10', intensity: 'light' }
+      : { durationMinutes: Math.min(strengthBase, cap), setsReps: '3x3-5', intensity: 'hard' };
+  } else if (phase === 'build') {
+    strengthTargets = { durationMinutes: Math.min(strengthBase, maxMinutes), setsReps: '4x5-6', intensity: 'hard' };
+  } else {
+    // base or no marathon phase
+    strengthTargets = { durationMinutes: Math.min(strengthBase, maxMinutes), setsReps: '3x10-12', intensity: 'moderate' };
+  }
 
   return chosen.map((slot, i) => createSession({
-    id: `sess_strength_1_${slot.dateStr}_str_${i}`,
+    id: `sess_strength_1_${slot.dateStr}_str_${startIndex + i}`,
     programId: 'strength_1',
     localDate: slot.dateStr,
-    title: titles[i % titles.length],
+    title: titles[(startIndex + i) % titles.length],
     kind: 'Strength',
     hardness: 'hard',
     requiresRecovery: true,
@@ -521,7 +685,7 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
  * Peak:  LR (longest) + Tempo + Intervals (both quality types in one week)
  * Taper: LR (shortened) + one quality session (shorter) — volume down, sharpness up
  */
-function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, maxMinutes, endurancePerWeek, marathonPhase = null) {
+function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, maxMinutes, endurancePerWeek, marathonPhase = null, recentSignals = null) {
   const specs = [];
   const isOddWeek = weekSeed % 2 === 1;
   const phase = marathonPhase?.phase ?? null;
@@ -536,20 +700,52 @@ function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, max
   specs.push({ kind: 'LR', title: 'Long Run', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: lrDuration, intensity: 'easy' }, ruleRefs: ['RULE_KEY_WORKOUT_PRIORITY'] });
 
   // Z2 duration per session — lighter deload factor to preserve aerobic stimulus (Bosquet & Mujika 2012)
+  // Cap at LR duration: LR is key workout (SRC032 Issurin); Z2 is support, never longer (SRC016/017)
   const Z2_DELOAD_FACTOR = phase === 'taper' ? 0.6 : 0.75;
   const z2Count = Math.max(1, (endurancePerWeek || 2) - 2);
-  const z2Duration = Math.min(maxMinutes, Math.round(
+  let z2Duration = Math.min(maxMinutes, Math.round(
     ((baseline?.z2DurationMinutes > 0)
       ? baseline.z2DurationMinutes
-      : Math.max(20, Math.min(Math.round(lrAnchorFull * 1.3 / z2Count), 80)))
+      : Math.max(40, Math.min(Math.round(lrAnchorFull * 1.3 / z2Count), 80)))
     * (deload || phase === 'taper' ? Z2_DELOAD_FACTOR : 1.0)
   ));
+  z2Duration = Math.min(z2Duration, lrDuration);
+  // Minimum 40 min for meaningful aerobic stimulus (Laursen & Buchheit 2019); respect LR cap if LR < 40 (very early training)
+  z2Duration = Math.max(z2Duration, Math.min(40, lrDuration));
 
   if (phase === 'base' && isMarathon) {
-    // Base: aerobic foundation — Z2 + Tempo only (no Intervals yet)
-    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
-    specs.push({ kind: 'Tempo', title: 'Tempo', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 30, intensity: 'threshold' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
-    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    // Base: aerobic foundation — Z2 + Tempo (if allowed).
+    // Composite tempo gate (signal-based, not calendar-only):
+    //   Hadd/Maffetone: beginners need aerobic base before intensity.
+    //   Advanced runners need less base time — gate on fitness + load signals.
+    //   ACWR < 0.8 means undertrained → not ready for quality regardless of weeks.
+    //   Refs: Hadd 2008, Maffetone 2010, Seiler 2009 (SRC018, SRC021).
+    const perceivedFitness = baseline?.perceivedFitness || 'moderate';
+    const weeksIntoBase = marathonPhase?.weeksIntoBase ?? 0;
+    const longestRun = baseline?.longestRecentRunMinutes ?? 0;
+    const acwr = recentSignals?.acwr ?? 1.0;
+
+    // High/advanced: 1+ weeks base + longestRun >= 45min + ACWR >= 0.8
+    // Moderate: 3+ weeks base + longestRun >= 60min + ACWR >= 0.8
+    // Low: no Tempo in Base phase at all (pure aerobic foundation)
+    const tempoAllowed = acwr >= 0.8 && (() => {
+      if (perceivedFitness === 'high' || perceivedFitness === 'advanced') {
+        return weeksIntoBase >= 1 && longestRun >= 45;
+      }
+      if (perceivedFitness === 'moderate') {
+        return weeksIntoBase >= 3 && longestRun >= 60;
+      }
+      return false; // low fitness: no tempo in base
+    })();
+
+    const z2Note = z2Duration >= 40 ? 'Optional: 4–6 × 20s Strides am Ende (locker ausschütteln, kein Sprint)' : undefined;
+    const z2Targets = { durationMinutes: z2Duration, intensity: 'Z2', ...(z2Note ? { note: z2Note } : {}) };
+
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: z2Targets, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    if (tempoAllowed) {
+      specs.push({ kind: 'Tempo', title: 'Tempo', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 30, intensity: 'threshold' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    }
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: z2Targets, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
   } else if (phase === 'build' && isMarathon) {
     // Build: introduce quality + Marathon Pace runs
     specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
@@ -591,36 +787,49 @@ function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, max
   return specs;
 }
 
-function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals, maxMinutes, baseline, marathonPhase = null }) {
+function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals, maxMinutes, baseline, marathonPhase = null, completedWorkouts = [], enduranceTarget, maxHardPerWeek = 3, strengthTarget = 0 }) {
   const sessions = [];
   const usedDates = new Set();
   const usedHardDates = new Set();
   const weekSeed = Math.floor(new Date(slots[0]?.dateStr || new Date().toISOString().slice(0, 10)).getTime() / (7 * 24 * 60 * 60 * 1000));
+  const modalityTarget = enduranceTarget ?? targets.endurancePerWeek;
+  const leaveGapsForStrength = strengthTarget >= 2;
 
-  const specs = buildEnduranceSpecs(enduranceMilestone, weekSeed, targets.deload, baseline, maxMinutes, targets.endurancePerWeek, marathonPhase);
-  const desired = Math.min(targets.endurancePerWeek, slots.length);
-  let created = 0;
+  const specs = buildEnduranceSpecs(enduranceMilestone, weekSeed, targets.deload, baseline, maxMinutes, targets.endurancePerWeek, marathonPhase, recentSignals);
 
   for (const spec of specs) {
-    if (created >= desired) break;
+    if (sessions.length >= modalityTarget) break;
+    const sortedSlots = sortSlotsForSpec(slots, spec);
+    let candidates = [];
 
-    let candidate = null;
-    for (const slot of slots) {
+    for (const slot of sortedSlots) {
       if (usedDates.has(slot.dateStr)) continue;
+      if (countModalityInWindow(slot.dateStr, completedWorkouts, sessions, 'endurance') >= modalityTarget) continue;
+      if (spec.hardness === 'hard' && countHardInWindow(slot.dateStr, completedWorkouts, sessions) >= maxHardPerWeek) continue;
       if (spec.hardness === 'hard' && !canPlaceHardOnDate(slot.dateStr, usedHardDates, recentSignals.hardDates, recentSignals.veryHardDates)) continue;
-      candidate = slot;
-      break;
+      candidates.push(slot);
+      if (!leaveGapsForStrength) break;
     }
 
-    if (!candidate) {
-      for (const slot of slots) {
-        if (!usedDates.has(slot.dateStr)) {
-          candidate = slot;
-          break;
+    if (candidates.length === 0) {
+      for (const slot of sortedSlots) {
+        if (!usedDates.has(slot.dateStr) && countModalityInWindow(slot.dateStr, completedWorkouts, sessions, 'endurance') < modalityTarget) {
+          candidates.push(slot);
+          if (!leaveGapsForStrength) break;
         }
       }
     }
 
+    let candidate = null;
+    if (leaveGapsForStrength && candidates.length > 1) {
+      candidate = candidates.reduce((best, s) => {
+        const gapBest = minGapBetweenFreeSlots(slots, usedDates, best.dateStr);
+        const gapS = minGapBetweenFreeSlots(slots, usedDates, s.dateStr);
+        return gapS > gapBest ? s : best;
+      }, candidates[0]);
+    } else {
+      candidate = candidates[0];
+    }
     if (!candidate) break;
 
     const idx = sessions.length;
@@ -639,7 +848,6 @@ function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSign
 
     usedDates.add(candidate.dateStr);
     if (spec.hardness === 'hard') usedHardDates.add(candidate.dateStr);
-    created++;
   }
 
   return sessions;
@@ -647,10 +855,8 @@ function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSign
 
 /**
  * @param {object[]} sessions - planned sessions to validate
- * @param {number} recentHardCount - hard sessions already completed in the rolling window
- * @param {number} maxHardPerWeek - max hard sessions allowed in any rolling 7-day window
  */
-function applyGuardrails(sessions, recentHardCount = 0, maxHardPerWeek = 3) {
+function applyGuardrails(sessions) {
   const byDate = {};
   for (const s of sessions) {
     if (!byDate[s.localDate]) byDate[s.localDate] = [];
@@ -672,13 +878,6 @@ function applyGuardrails(sessions, recentHardCount = 0, maxHardPerWeek = 3) {
     }
   }
 
-  // Cap total hard sessions: completed (unplanned or otherwise) + planned <= maxHardPerWeek
-  const plannedHard = sessions.filter((s) => isHardKind(s.kind) && !toRemove.has(s.id));
-  const remainingHardBudget = Math.max(0, maxHardPerWeek - recentHardCount);
-  if (plannedHard.length > remainingHardBudget) {
-    for (const s of plannedHard.slice(remainingHardBudget)) toRemove.add(s.id);
-  }
-
   return sessions.filter((s) => !toRemove.has(s.id));
 }
 
@@ -686,8 +885,8 @@ function applyGuardrails(sessions, recentHardCount = 0, maxHardPerWeek = 3) {
  * Downgrade session intensity based on today's readiness score.
  * Only affects the first planned slot when it is today or tomorrow —
  * readiness has no predictive value for sessions 2+ days out.
- * readiness < 50  → downgrade Intervals/Tempo/LR to Z2 on first slot
- * readiness 50–65 → downgrade only Intervals/Tempo to Z2 on first slot
+ * readiness < 50  → Endurance: LR/Tempo/Intervals → Z2. Strength: → light (2×12–15).
+ * readiness 50–65 → Endurance: Tempo/Intervals → Z2. Strength: unchanged.
  * readiness > 65  → no change
  * When data quality is insufficient, skip gating entirely.
  */
@@ -704,21 +903,113 @@ function applyReadinessGating(sessions, readiness, today) {
 
   const gated = sessions.map((s) => {
     if (s.localDate !== firstDate) return s;
+    const label = readiness.label || 'low';
+    if (s.kind === 'Strength') {
+      if (score >= 50) return s;
+      return {
+        ...s,
+        title: `${s.title} (readiness ${score})`,
+        targets: {
+          ...s.targets,
+          setsReps: '2x12-15',
+          intensity: 'light',
+          durationMinutes: Math.min(s.targets.durationMinutes || 60, Math.round((s.targets.durationMinutes || 60) * 0.67)),
+          note: `Downgraded to light — readiness ${score} (${label}). Kein Volumen-Stimulus, nur Erhalt.`,
+        },
+        readinessGated: true,
+      };
+    }
     const shouldDowngrade = score < 50
       ? ['LR', 'Tempo', 'Intervals'].includes(s.kind)
-      : ['Tempo', 'Intervals'].includes(s.kind); // 50–65: leave Strength, LR alone
+      : ['Tempo', 'Intervals'].includes(s.kind);
     if (!shouldDowngrade) return s;
     return {
       ...s,
       kind: 'Z2',
       title: `Zone 2 (readiness ${score})`,
       modality: 'endurance',
-      targets: { ...s.targets, intensity: 'Z2', note: `Downgraded from ${s.kind} — readiness score ${score} (${readiness.label || 'low'})` },
+      hardness: 'easy',
+      requiresRecovery: false,
+      targets: { ...s.targets, intensity: 'Z2', note: `Downgraded from ${s.kind} — readiness score ${score} (${label})` },
       readinessGated: true,
     };
   });
   const didGate = gated.some((s) => s.readinessGated === true);
   return { sessions: gated, readinessGated: didGate };
+}
+
+/**
+ * If LR was downgraded to Z2 by readiness, try to place it on a later slot in the same week.
+ * Priority: (1) free weekend slots (Sa/So), (2) Z2 swap on weekend, (3) Z2 swap on weekday.
+ * LR belongs on weekends for recovery quality and lifestyle alignment (Maffetone 2010).
+ * If no suitable slot exists, sets lrCarryoverFailed for recommendation.
+ */
+function applyLRCarryover(sessions, recentSignals, maxHardPerWeek, enduranceMilestone = null, completedWorkouts = [], allSlots = []) {
+  const downgradedLR = sessions.find((s) =>
+    s.readinessGated && s.kind === 'Z2' && (s.targets?.note || '').includes('Downgraded from LR')
+  );
+  if (!downgradedLR || !enduranceMilestone) return { sessions, lrCarryoverFailed: false };
+
+  const lrDuration = downgradedLR.targets?.durationMinutes ?? 60;
+  const downgradedDate = downgradedLR.localDate;
+  const usedHardDates = new Set(sessions.filter((s) => isHardKind(s.kind)).map((s) => s.localDate));
+  const usedDates = new Set(sessions.map((s) => s.localDate));
+
+  function makeCarryoverLR(dateStr) {
+    return createSession({
+      id: `sess_${enduranceMilestone?.id || 'endurance_1'}_${dateStr}_lr_carryover`,
+      programId: enduranceMilestone?.id || 'endurance_1',
+      milestoneId: enduranceMilestone?.id || null,
+      localDate: dateStr,
+      title: 'Long Run (nachgeholt)',
+      kind: 'LR',
+      hardness: 'hard',
+      requiresRecovery: true,
+      targets: { durationMinutes: lrDuration, intensity: 'easy', note: 'LR von erstem Tag verschoben wegen Readiness' },
+      ruleRefs: ['RULE_KEY_WORKOUT_PRIORITY', 'RULE_LR_CARRYOVER'],
+    });
+  }
+
+  function isWeekend(dateStr) {
+    const dow = new Date(dateStr + 'T12:00:00').getDay();
+    return dow === 0 || dow === 6;
+  }
+
+  // Option 1: free weekend slot later in the week (no existing session there)
+  const freeWeekendSlots = allSlots.filter((slot) => {
+    const d = slot.dateStr;
+    if (d <= downgradedDate || !isWeekend(d) || usedDates.has(d)) return false;
+    if (!canPlaceHardOnDate(d, usedHardDates, recentSignals.hardDates, recentSignals.veryHardDates)) return false;
+    const hardCount = countHardInWindow(d, completedWorkouts, sessions);
+    return hardCount < maxHardPerWeek;
+  }).sort((a, b) => a.dateStr.localeCompare(b.dateStr));
+
+  if (freeWeekendSlots.length > 0) {
+    const dateStr = freeWeekendSlots[0].dateStr;
+    return { sessions: [...sessions, makeCarryoverLR(dateStr)], lrCarryoverFailed: false };
+  }
+
+  // Option 2+3: replace a Z2 session (weekends first, then weekdays)
+  const candidateZ2s = sessions
+    .filter((s) => s.kind === 'Z2' && s.localDate > downgradedDate && !s.readinessGated)
+    .sort((a, b) => {
+      const isWeekendA = isWeekend(a.localDate) ? 0 : 1;
+      const isWeekendB = isWeekend(b.localDate) ? 0 : 1;
+      if (isWeekendA !== isWeekendB) return isWeekendA - isWeekendB; // weekends first
+      return a.localDate.localeCompare(b.localDate);
+    });
+
+  for (const z2 of candidateZ2s) {
+    const dateStr = z2.localDate;
+    if (!canPlaceHardOnDate(dateStr, usedHardDates, recentSignals.hardDates, recentSignals.veryHardDates)) continue;
+    const hardCount = countHardInWindow(dateStr, completedWorkouts, sessions);
+    if (hardCount >= maxHardPerWeek) continue;
+
+    const replacement = sessions.map((s) => (s.id === z2.id ? makeCarryoverLR(dateStr) : s));
+    return { sessions: replacement, lrCarryoverFailed: false };
+  }
+
+  return { sessions, lrCarryoverFailed: true };
 }
 
 function enforceNoMixedModalityPerDay(sessions) {
@@ -754,8 +1045,17 @@ function enforceNoMixedModalityPerDay(sessions) {
   return sessions.filter((s) => !toRemove.has(s.id));
 }
 
-function buildRecommendations(goals, targets, readiness = null, readinessGated = false, marathonPhase = null) {
+function buildRecommendations(goals, targets, readiness = null, readinessGated = false, marathonPhase = null, polarizedRatioExceeded = false, lrCarryoverFailed = false, strengthShortfall = false) {
   const recs = [];
+  if (polarizedRatioExceeded) {
+    recs.push({ kind: 'polarized', title: '80/20 Endurance-Ratio', text: 'Anteil harter Endurance-Sessions >25% (Seiler 2009). Optimal: ~80% easy, ~20% hard. Erwäge eine Qualitätseinheit durch Z2 zu ersetzen.' });
+  }
+  if (lrCarryoverFailed) {
+    recs.push({ kind: 'lr_carryover', title: 'Long Run nachholen', text: 'LR wurde wegen Readiness downgedgradet; kein passender Slot in dieser Woche. Long Run in der nächsten Woche priorisieren.' });
+  }
+  if (strengthShortfall) {
+    recs.push({ kind: 'strength_shortfall', title: 'Kraft-Soll unterschritten', text: 'Ziel: 2+ Strength-Sessions. Begrenzt durch Hard-Budget, Restdays oder blockierte Tage. Zwei-a-days oder zusätzliche Tage prüfen.' });
+  }
   if ((goals || []).some((g) => g.kind === 'sleep')) {
     recs.push({ kind: 'sleep', title: 'Sleep protocol', text: 'Aim for 7-9h sleep. Keep bedtime and wake time consistent.' });
   }
@@ -767,7 +1067,7 @@ function buildRecommendations(goals, targets, readiness = null, readinessGated =
     const label = readiness.label || 'low';
     const score = readiness.score;
     const msg = score < 50
-      ? `Readiness today is ${score} (${label}). First planned session downgraded to Z2. Consider extra rest.`
+      ? `Readiness today is ${score} (${label}). First planned session downgraded (Z2 or light Strength). Consider extra rest.`
       : `Readiness today is ${score} (${label}). Intervals/Tempo downgraded to Z2 on first planned day.`;
     recs.push({ kind: 'readiness', title: 'Readiness gate', text: msg });
   }
@@ -803,15 +1103,17 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
         : 'strength_only';
 
   const baseMax = constraints.maxMinutesPerDay || 120;
-  const maxHardPerWeek = deriveMaxHard(intake);
   const recentSignals = collectRecentSignals(workouts, today, scores);
+  const maxHardPerWeek = deriveMaxHard(intake, recentSignals);
   const slots = buildRollingSlots(today, constraints).filter((s) => !recentSignals.completedDates.has(s.dateStr));
-  const targets = estimateTargets(intake, profile, mode, recentSignals);
 
-  // Marathon phase — computed from the nearest marathon milestone's race date
+  // Marathon phase — computed before targets (needed for proactive deload, strength periodization)
   const marathonMilestone = intake.milestones?.find((m) => m.kind === 'marathon')
     || intake.goals?.find((g) => g.subKind === 'marathon' && g.dateLocal);
-  const marathonPhase = getMarathonPhase(marathonMilestone?.dateLocal ?? null, today);
+  const trainingStartDate = intake.trainingStartDate ?? marathonMilestone?.trainingStartDate ?? null;
+  const marathonPhase = getMarathonPhase(marathonMilestone?.dateLocal ?? null, today, trainingStartDate);
+
+  const targets = estimateTargets(intake, profile, mode, recentSignals, marathonPhase);
 
   // Marathon prep: bump cap so LR can reach 2h+ at peak — use at least 150 min (user constraint respected if higher)
   const MARATHON_LR_MIN_MINUTES = 150;
@@ -819,59 +1121,231 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
     ? Math.max(baseMax, MARATHON_LR_MIN_MINUTES)
     : baseMax;
 
-  // Subtract already-completed sessions from this week's remaining targets.
-  // This prevents the generator from stacking more endurance on top of sessions already done.
-  // During taper: also reduce endurance frequency (volume down, intensity maintained).
+  // During taper: reduce endurance frequency (volume down, intensity maintained).
   let enduranceTarget = targets.endurancePerWeek;
   if (marathonPhase?.phase === 'taper') {
     const taperFreqFactors = [1.0, 0.7, 0.4]; // taper weeks 1/2/3
     enduranceTarget = Math.max(1, Math.round(enduranceTarget * taperFreqFactors[Math.min(marathonPhase.taperWeek - 1, 2)]));
   }
-  const remainingEndurance = Math.max(0, enduranceTarget - recentSignals.completedEndurance);
-  const remainingStrength = Math.max(0, targets.strengthPerWeek - recentSignals.completedStrength);
-  const adjustedTargets = { ...targets, endurancePerWeek: remainingEndurance, strengthPerWeek: remainingStrength };
+  const adjustedTargets = { ...targets, endurancePerWeek: enduranceTarget, strengthPerWeek: targets.strengthPerWeek };
 
   const hardDatesForPlanning = new Set(recentSignals.hardDates);
   if (recentSignals.trainedToday) hardDatesForPlanning.add(today);
   const planningSignals = { ...recentSignals, hardDates: hardDatesForPlanning };
 
+  const normalizedWorkouts = (workouts || []).map(normalizeWorkout).filter((w) => !!w.localDate);
+
   let sessions = [];
+  let strengthShortfall = false;
 
   const baseline = intake.baseline || {};
 
   if (mode === 'strength_only') {
-    sessions = buildStrengthSessions({ intake, targets: adjustedTargets, slots, maxMinutes, recentHardDates: planningSignals.hardDates });
+    sessions = buildStrengthSessions({
+      intake,
+      targets: adjustedTargets,
+      slots,
+      maxMinutes,
+      recentHardDates: planningSignals.hardDates,
+      recentVeryHardDates: planningSignals.veryHardDates,
+      completedWorkouts: normalizedWorkouts,
+      strengthTarget: targets.strengthPerWeek,
+      maxHardPerWeek,
+      marathonPhase,
+    });
   } else if (mode === 'endurance_only') {
-    sessions = buildEnduranceSessions({ enduranceMilestone, targets: adjustedTargets, slots, recentSignals: planningSignals, maxMinutes, baseline, marathonPhase });
-  } else {
-    const enduranceSlots = slots.filter((s, i) => i % 2 === 0);
-    const strengthSlots = slots.filter((s, i) => i % 2 === 1);
-
-    const enduranceSessions = remainingEndurance > 0 ? buildEnduranceSessions({
+    sessions = buildEnduranceSessions({
       enduranceMilestone,
-      targets: { ...adjustedTargets, endurancePerWeek: Math.min(remainingEndurance, enduranceSlots.length || slots.length) },
-      slots: enduranceSlots.length ? enduranceSlots : slots,
+      targets: adjustedTargets,
+      slots,
       recentSignals: planningSignals,
       maxMinutes,
       baseline,
       marathonPhase,
-    }) : [];
-    const strengthSessions = remainingStrength > 0 ? buildStrengthSessions({
-      intake,
-      targets: { ...adjustedTargets, strengthPerWeek: Math.min(remainingStrength, strengthSlots.length || slots.length) },
-      slots: strengthSlots.length ? strengthSlots : slots,
+      completedWorkouts: normalizedWorkouts,
+      enduranceTarget,
+      maxHardPerWeek,
+    });
+  } else {
+    // Hybrid mode:
+    // 1. Endurance gets priority when marathon is the primary goal. Otherwise interleaved.
+    // 2. Before endurance placement, reserve a guaranteed minimum for strength
+    //    (min(2, strengthTarget) slots) so they are never crowded out.
+    // 3. Two-a-days: only activated as FALLBACK when strength target cannot be met with
+    //    single sessions on free days. allowTwoADays in intake = "permitted if needed",
+    //    not "always use two-a-days". Fyfe et al. 2016: two-a-days only when necessary,
+    //    with ≥3h separation (strength morning, endurance evening).
+    // Per-slot rolling window prevents last week's workouts blocking this week. SRC029–SRC032.
+
+    const twoADaysPermitted = intake.constraints?.allowTwoADays === true;
+    // allowTwoADays is now derived dynamically in Step 4 (only if quota can't be met)
+    const allowTwoADays = twoADaysPermitted;
+    const hasMarathonGoal = !!marathonMilestone;
+    const strTarget = targets.strengthPerWeek;
+    const minStrengthGuarantee = strTarget >= 1 ? Math.min(strTarget, 2) : 0;
+
+    // Step 1: Pre-reserve strength slots (guaranteed minimum)
+    // We run a dry-run of strength placement to claim the best slots first.
+    const reservedStrSessions = minStrengthGuarantee > 0
+      ? buildStrengthSessions({
+          intake,
+          targets: adjustedTargets,
+          slots,
+          maxMinutes,
+          recentHardDates: planningSignals.hardDates,
+          recentVeryHardDates: planningSignals.veryHardDates,
+          completedWorkouts: normalizedWorkouts,
+          strengthTarget: minStrengthGuarantee,
+          maxHardPerWeek,
+          marathonPhase,
+        })
+      : [];
+    const reservedStrDates = new Set(reservedStrSessions.map((s) => s.localDate));
+
+    // Step 2: Endurance planning on all slots; when marathon goal → skip reserved str slots
+    // (unless two-a-days enabled, in which case reserved slots are still available for endurance).
+    const enduranceSlots = (hasMarathonGoal && !allowTwoADays)
+      ? slots.filter((s) => !reservedStrDates.has(s.dateStr))
+      : slots;
+
+    const enduranceSessions = buildEnduranceSessions({
+      enduranceMilestone,
+      targets: adjustedTargets,
+      slots: enduranceSlots,
+      recentSignals: planningSignals,
       maxMinutes,
-      avoidHardDates: new Set(enduranceSessions.filter((s) => isHardKind(s.kind)).map((s) => s.localDate)),
+      baseline,
+      marathonPhase,
+      completedWorkouts: normalizedWorkouts,
+      enduranceTarget,
+      maxHardPerWeek,
+      strengthTarget: strTarget,
+    });
+    const enduranceDates = new Set(enduranceSessions.map((s) => s.localDate));
+
+    // Step 3: Full strength placement on non-endurance slots
+    // (guaranteed slots + any additional free slots).
+    // LR buffer: day before LR is protected — no hard session the day before the key workout.
+    // Maffetone 2010: LR quality depends on arriving fresh. Already partially enforced by
+    // bidirectional adjacency in canPlaceHardOnDate, but made explicit here for clarity.
+    const lrSession = enduranceSessions.find((s) => s.kind === 'LR');
+    const lrBufferDate = lrSession ? addDays(lrSession.localDate, -1) : null;
+    const enduranceHardDates = new Set(enduranceSessions.filter((s) => isHardKind(s.kind)).map((s) => s.localDate));
+    if (lrBufferDate) enduranceHardDates.add(lrBufferDate); // explicitly protect day before LR
+
+    // If readiness will gate today's LR (score < 50), LR will need carryover — protect Saturday
+    // so strength doesn't claim it. This gives the carryover a free weekend landing spot.
+    const readinessScore = recentSignals.readiness?.score ?? 100;
+    const todayHasLR = enduranceSessions.some((s) => s.kind === 'LR' && s.localDate === today);
+    const lrWillBeGated = readinessScore < 50 && todayHasLR;
+    const saturdayDate = addDays(today, 6);
+    const saturdayDow = new Date(saturdayDate + 'T12:00:00').getDay();
+    const saturdayStr = saturdayDow === 6 ? saturdayDate : null; // only if it's actually a Saturday
+
+    // Strength slot sorting: prefer weekdays over Saturday (keep Saturday free for LR carryover).
+    // When LR will be gated: also exclude Saturday from strength slots entirely.
+    const strengthSlots = slots
+      .filter((s) => {
+        if (enduranceDates.has(s.dateStr)) return false;
+        if (lrWillBeGated && saturdayStr && s.dateStr === saturdayStr) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        // Prefer weekdays (Mon–Fri) over Saturday to keep weekend free for LR
+        const dowA = new Date(a.dateStr + 'T12:00:00').getDay();
+        const dowB = new Date(b.dateStr + 'T12:00:00').getDay();
+        const isSatA = dowA === 6 ? 1 : 0;
+        const isSatB = dowB === 6 ? 1 : 0;
+        return isSatA - isSatB;
+      });
+
+    const strengthSessions = buildStrengthSessions({
+      intake,
+      targets: adjustedTargets,
+      slots: strengthSlots,
+      maxMinutes,
+      avoidHardDates: enduranceHardDates,
       recentHardDates: planningSignals.hardDates,
       recentVeryHardDates: planningSignals.veryHardDates,
-    }) : [];
-    sessions = [...enduranceSessions, ...strengthSessions];
-    sessions = enforceNoMixedModalityPerDay(sessions);
+      completedWorkouts: normalizedWorkouts,
+      strengthTarget: strTarget,
+      maxHardPerWeek,
+      marathonPhase,
+    });
+
+    // Step 4: Two-a-days — FALLBACK ONLY when strength quota cannot be met on free days.
+    // Only activates when: (a) user permits it AND (b) single-session placement came up short.
+    // Preferred sequencing: strength morning, endurance evening (Fyfe et al. 2016, SRC030).
+    let twoADaySessions = [];
+    if (twoADaysPermitted && strengthSessions.length < strTarget) {
+      const alreadyStrDates = new Set(strengthSessions.map((s) => s.localDate));
+      const easyEnduranceDays = enduranceSessions
+        .filter((s) => s.hardness === 'easy' && !alreadyStrDates.has(s.localDate) && s.localDate !== lrBufferDate)
+        .sort((a, b) => a.localDate.localeCompare(b.localDate));
+
+      const twoADaySlots = easyEnduranceDays
+        .map((s) => slots.find((sl) => sl.dateStr === s.localDate))
+        .filter(Boolean);
+
+      const remaining = strTarget - strengthSessions.length;
+      const extraStr = buildStrengthSessions({
+        intake,
+        targets: adjustedTargets,
+        slots: twoADaySlots,
+        maxMinutes,
+        avoidHardDates: enduranceHardDates, // includes LR date + lrBufferDate
+        recentHardDates: planningSignals.hardDates,
+        recentVeryHardDates: planningSignals.veryHardDates,
+        completedWorkouts: normalizedWorkouts,
+        strengthTarget: remaining,
+        maxHardPerWeek,
+        marathonPhase,
+        startIndex: strengthSessions.length, // continue naming from where regular strength left off
+      });
+      // Tag two-a-day sessions with timing recommendation
+      twoADaySessions = extraStr.map((s) => ({
+        ...s,
+        id: s.id + '_2ad',
+        twoADay: true,
+        note: 'Two-a-day: Kraft morgens (≥3h vor Ausdauer). Kein HIIT/Intervals am gleichen Tag (Interferenz-Effekt).',
+      }));
+    }
+
+    // Combine and re-index strength sessions by calendar order (A = earliest, B = next...)
+    // so naming reflects the actual training week sequence, not placement order.
+    const allStrengthSessions = [...strengthSessions, ...twoADaySessions]
+      .sort((a, b) => a.localDate.localeCompare(b.localDate));
+    const split = intake.baseline?.strengthSplitPreference || 'full_body';
+    const splitTitles = { full_body: ['Full Body A', 'Full Body B'], upper_lower: ['Upper', 'Lower'], push_pull_legs: ['Push', 'Pull', 'Legs'], bro_split: ['Chest/Triceps', 'Back/Biceps', 'Legs', 'Shoulders'] };
+    const strTitles = splitTitles[split] || splitTitles.full_body;
+    const reindexedStrength = allStrengthSessions.map((s, i) => ({ ...s, title: strTitles[i % strTitles.length] }));
+
+    sessions = [...enduranceSessions, ...reindexedStrength];
+    if (!allowTwoADays) sessions = enforceNoMixedModalityPerDay(sessions);
+
+    const totalStrength = sessions.filter((s) => s.modality === 'strength').length;
+    strengthShortfall = strTarget >= 2 && totalStrength < 2;
   }
 
-  sessions = applyGuardrails(sessions, recentSignals.hardCount, maxHardPerWeek);
+  sessions = applyGuardrails(sessions);
   const { sessions: readinessGatedSessions, readinessGated } = applyReadinessGating(sessions, recentSignals.readiness, today);
   sessions = readinessGatedSessions.sort((a, b) => a.localDate.localeCompare(b.localDate));
+
+  let lrCarryoverFailed = false;
+  if (mode !== 'strength_only' && enduranceMilestone) {
+    const carryover = applyLRCarryover(sessions, planningSignals, maxHardPerWeek, enduranceMilestone, normalizedWorkouts, slots);
+    sessions = carryover.sessions.sort((a, b) => a.localDate.localeCompare(b.localDate));
+    lrCarryoverFailed = carryover.lrCarryoverFailed;
+  }
+
+  // 80/20 polarized ratio (Seiler 2009): endurance-only — target ≤25% hard within endurance
+  // Strength and fixedEvents are NOT counted; they follow separate rules (Hard-Budget, Recovery).
+  const enduranceSessions = sessions.filter((s) => isEnduranceKind(s.kind));
+  const enduranceHard = enduranceSessions.filter((s) => isHardKind(s.kind)).length;
+  const enduranceEasy = enduranceSessions.filter((s) => !isHardKind(s.kind)).length;
+  const enduranceTotal = enduranceHard + enduranceEasy;
+  const hardRatio = enduranceTotal > 0 ? enduranceHard / enduranceTotal : 0;
+  const polarizedRatioOk = hardRatio <= 0.25;
 
   const blueprint = {
     mode,
@@ -885,7 +1359,18 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
       maxHardPerWeek,
       hardRemaining: Math.max(0, maxHardPerWeek - recentSignals.hardCount),
       deload: targets.deload,
+      deloadReason: targets.deloadReason ?? null,
       acwr: targets.acwr,
+      strengthShortfall: strengthShortfall || null,
+    },
+    polarizedRatio: {
+      scope: 'endurance_only',
+      hard: Math.round(hardRatio * 100) / 100,
+      target: 0.2,
+      ok: polarizedRatioOk,
+      hardCount: enduranceHard,
+      easyCount: enduranceEasy,
+      totalCount: enduranceTotal,
     },
     recent7d: {
       totalMinutes: recentSignals.totalMinutes,
@@ -903,7 +1388,7 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
 
   return {
     sessions,
-    recommendations: buildRecommendations(intake.goals || [], targets, recentSignals.readiness, readinessGated, marathonPhase),
+    recommendations: buildRecommendations(intake.goals || [], targets, recentSignals.readiness, readinessGated, marathonPhase, !polarizedRatioOk, lrCarryoverFailed, strengthShortfall),
     blueprint,
   };
 }
@@ -931,6 +1416,23 @@ function main() {
   const constraints = intake.constraints || {};
   const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
   const { sessions, recommendations, blueprint } = orchestrate(intake, profile, workoutsRaw, today, constraints, scoresRaw);
+
+  // Auto-update longestRecentRunMinutes from completed endurance workouts (last 14 days)
+  const longestCompletedEndurance = workoutsRaw
+    .filter((w) => {
+      const d = w.localDate || w.date;
+      if (!d || diffDays(today, d) > 14 || diffDays(today, d) < 0) return false;
+      return workoutModalityClass(w.type || w.workout_type || w.workoutType) === 'endurance';
+    })
+    .reduce((max, w) => {
+      const min = Math.round((w.duration_seconds ?? w.durationSeconds ?? w.duration ?? 0) / 60);
+      return Math.max(max, min);
+    }, 0);
+  const currentBaseline = intake.baseline?.longestRecentRunMinutes ?? 0;
+  if (longestCompletedEndurance > currentBaseline && intake.baseline) {
+    intake.baseline.longestRecentRunMinutes = longestCompletedEndurance;
+    fs.writeFileSync(INTAKE_FILE, JSON.stringify(intake, null, 2), 'utf8');
+  }
 
   const historyWorkouts = workoutsRaw.map((w) => ({
     id: (typeof w.id === 'string' && w.id.startsWith('salvor:')) ? w.id : `salvor:${w.id}`,
@@ -966,6 +1468,7 @@ function main() {
 
   const { getStatus } = require('../lib/status-helper');
   const currentStatus = getStatus();
+  const fixedEvents = getFixedEventsInWindow(constraints, today, addDays(today, 6));
   ensureDir(path.join(WORKSPACE, 'current'));
   fs.writeFileSync(
     path.join(WORKSPACE, 'current', 'training_plan_week.json'),
@@ -973,6 +1476,7 @@ function main() {
       updatedAt: new Date().toISOString(),
       weekStart: today,
       sessions: nextWeekSessions,
+      fixedEvents,
       status: currentStatus ? { status: currentStatus.status, until: currentStatus.until, note: currentStatus.note } : null,
       blueprint,
     }, null, 2),

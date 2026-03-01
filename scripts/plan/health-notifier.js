@@ -23,8 +23,12 @@ const CURRENT_DIR = path.join(WORKSPACE, 'current');
 const STATE_FILE = path.join(COACH_ROOT, 'workout_notify_state.json');
 const TODAY_FILE = path.join(CURRENT_DIR, 'workouts_today.json');
 const WEEK_FILE = path.join(CURRENT_DIR, 'training_plan_week.json');
+const CALENDAR_WEEK_FILE = path.join(CURRENT_DIR, 'calendar_week.json');
 const NOTIFICATION_FILE = path.join(CURRENT_DIR, 'health_coach_notification.json');
 const PENDING_ALERTS_FILE = path.join(CURRENT_DIR, 'health_coach_pending_alerts.json');
+const WEATHER_FILE = path.join(CURRENT_DIR, 'weather_forecast.json');
+
+const WORKOUT_TITLE_PATTERN = /run|zone|body|strength|full|long|interval|volleyball|sport|training|workout|cardio|hiit/i;
 
 const COOLDOWN_HOURS = Math.max(1, parseInt(process.env.HC_NOTIFY_COOLDOWN_HOURS || '6', 10) || 6);
 
@@ -130,6 +134,24 @@ function formatSleepForAgent(sleep) {
     deepMinutes: sleep.deep_minutes ?? sleep.deepMinutes ?? null,
     remMinutes: sleep.rem_minutes ?? sleep.remMinutes ?? null,
   };
+}
+
+function getWeatherForAgent(todayStr, tomorrowStr) {
+  const w = loadJson(WEATHER_FILE);
+  if (!w?.locations?.length) return null;
+  const loc = w.locations[0];
+  const today = loc.daily?.find((d) => d.date === todayStr);
+  const tomorrow = loc.daily?.find((d) => d.date === tomorrowStr);
+  const hint = [];
+  if (today?.trainingNote) hint.push(`Heute (${loc.name}): ${today.trainingNote}`);
+  if (tomorrow?.trainingNote) hint.push(`Morgen: ${tomorrow.trainingNote}`);
+  if (hint.length === 0 && (today || tomorrow)) {
+    const parts = [];
+    if (today) parts.push(`Heute: ${today.tempMin ?? '?'}–${today.tempMax ?? '?'}°C, ${today.weatherLabel ?? '?'}`);
+    if (tomorrow) parts.push(`Morgen: ${tomorrow.tempMin ?? '?'}–${tomorrow.tempMax ?? '?'}°C, ${tomorrow.weatherLabel ?? '?'}`);
+    return { summary: parts.join(' | '), hints: null };
+  }
+  return { summary: null, hints: hint };
 }
 
 function main() {
@@ -249,6 +271,11 @@ function main() {
   else if (hasWorkoutNotify) reason = planChanged ? 'new_workout_plan_changed' : 'new_workout_feedback_only';
   else if (hasScoresSleepNotify) reason = newScores && newSleep ? 'scores_and_sleep' : newScores ? 'scores_today' : 'sleep_last_night';
 
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = toLocalDate(tomorrow);
+  const weatherHint = getWeatherForAgent(todayStr, tomorrowStr);
+
   const notification = {
     at: now.toISOString(),
     notify: shouldNotify,
@@ -257,6 +284,7 @@ function main() {
     newWorkoutIds,
     planChanged: hasWorkoutNotify ? planChanged : false,
     feedback,
+    weather: weatherHint,
     latestWorkout: latestWorkout ? {
       type: latestWorkout.type || latestWorkout.title,
       duration: latestWorkout.duration,
@@ -277,18 +305,47 @@ function main() {
 
   if (shouldNotify) {
     const pending = loadJson(PENDING_ALERTS_FILE, []);
+    const context = {
+      feedback: notification.feedback,
+      planChanged: notification.planChanged,
+      changes: notification.changes,
+      latestWorkout: notification.latestWorkout,
+      workoutAnalysis: notification.workoutAnalysis,
+      scoresToday: notification.scoresToday,
+      sleepLastNight: notification.sleepLastNight,
+      weather: notification.weather,
+    };
+
+    // Workout + Kalender-Konflikt: Geplant vs. tatsächlich gemacht
+    if (hasWorkoutNotify && latestWorkout) {
+      const calendar = loadJson(CALENDAR_WEEK_FILE, { days: [] });
+      const todayDay = (calendar.days || []).find((d) => d.date === todayStr);
+      const plannedEvents = (todayDay?.events || []).filter(
+        (e) => !e.source || e.source !== 'salvor'
+      ).filter((e) => WORKOUT_TITLE_PATTERN.test(e.title || ''));
+      if (plannedEvents.length > 0) {
+        const planned = plannedEvents[0];
+        const newTitle = latestWorkout.type || latestWorkout.title || 'Workout';
+        const plannedTitle = planned.title || 'Geplant';
+        context.workoutCalendarConflict = {
+          newWorkout: {
+            title: newTitle,
+            duration: latestWorkout.duration,
+            time: latestWorkout.startTime ?? null,
+          },
+          plannedInCalendar: {
+            title: plannedTitle,
+            start: planned.startIso,
+          },
+          question: `Geplant war "${plannedTitle}", gemacht "${newTitle}". Kalender anpassen (geplant löschen, Salvor behalten)?`,
+        };
+      }
+    }
+
     pending.push({
       at: now.toISOString(),
       type: hasWorkoutNotify ? 'health_coach_workout_update' : 'health_coach_daily',
-      context: {
-        feedback: notification.feedback,
-        planChanged: notification.planChanged,
-        changes: notification.changes,
-        latestWorkout: notification.latestWorkout,
-        workoutAnalysis: notification.workoutAnalysis,
-        scoresToday: notification.scoresToday,
-        sleepLastNight: notification.sleepLastNight,
-      },
+      context,
       source: 'health-notifier',
     });
     saveJson(PENDING_ALERTS_FILE, pending.slice(-50));

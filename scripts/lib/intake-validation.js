@@ -101,6 +101,33 @@ function validateIntakeV3(payload, opts = {}) {
     errors.push(`Invalid strengthSplitPreference: ${baseline.strengthSplitPreference}. Valid: ${VALID_STRENGTH_SPLITS.join(', ')}`);
   }
 
+  // perceivedFitness: used for Tempo-Gate, Hard-Cap (low, moderate, high, advanced)
+  const VALID_FITNESS = ['low', 'moderate', 'high', 'advanced'];
+  if (baseline.perceivedFitness != null && !VALID_FITNESS.includes(String(baseline.perceivedFitness).toLowerCase())) {
+    errors.push(`Invalid perceivedFitness: ${baseline.perceivedFitness}. Valid: ${VALID_FITNESS.join(', ')}`);
+  }
+
+  // maxHardSessionsPerWeek: optional override (1–6)
+  if (baseline.maxHardSessionsPerWeek != null) {
+    const n = Number(baseline.maxHardSessionsPerWeek);
+    if (isNaN(n) || n < 1 || n > 6) {
+      errors.push('baseline.maxHardSessionsPerWeek must be between 1 and 6.');
+    }
+  }
+
+  // allowTwoADays: optional boolean, allows strength + endurance on the same day
+  if (constraints.allowTwoADays != null && typeof constraints.allowTwoADays !== 'boolean') {
+    errors.push('constraints.allowTwoADays must be a boolean (true/false).');
+  }
+
+  // trainingStartDate: optional YYYY-MM-DD for marathon phase anchoring
+  if (payload.trainingStartDate != null) {
+    const d = new Date(payload.trainingStartDate + 'T12:00:00');
+    if (isNaN(d.getTime())) {
+      errors.push('trainingStartDate must be a valid date (YYYY-MM-DD).');
+    }
+  }
+
   // z2DurationMinutes: optional override for Zone 2 session length (20–120 min)
   if (baseline.z2DurationMinutes != null) {
     const n = Number(baseline.z2DurationMinutes);

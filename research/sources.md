@@ -168,3 +168,27 @@ Stable source IDs for citation. Each entry: ID, URL, short annotation.
 
 - **URL:** https://medcraveonline.com/MOJSM/MOJSM-02-00056.pdf
 - **Annotation:** Specific periodization for volleyball; technical and game-situation training; load monitoring; integration with match schedule.
+
+---
+
+## Concurrent Training / Interference Effect
+
+## SRC029 — Hickson (1980) — Interference effect
+
+- **URL:** https://pubmed.ncbi.nlm.nih.gov/7193134/
+- **Annotation:** Interference of strength development by simultaneously training for strength and endurance. Concurrent training attenuates strength gains; endurance adaptations unaffected. Foundational study for interference effect.
+
+## SRC030 — Wilson et al. (2012) — Concurrent training meta-analysis
+
+- **URL:** https://pubmed.ncbi.nlm.nih.gov/22002517/
+- **Annotation:** Meta-analysis: running + resistance causes interference (hypertrophy, strength); cycling + resistance less so. Frequency and duration of endurance inversely correlate with strength gains.
+
+## SRC031 — Fyfe et al. (2016) — Interference and sequencing
+
+- **URL:** https://pubmed.ncbi.nlm.nih.gov/27857692/
+- **Annotation:** Endurance addition attenuates lower-body strength gains regardless of intensity. Sequencing: strength before endurance in same day optimizes strength adaptations (Murlasits meta-analysis).
+
+## SRC032 — Issurin (2010) — Block periodization
+
+- **URL:** https://link.springer.com/article/10.2165/11319770-000000000-00000
+- **Annotation:** New horizons for training periodization. Block periodization: concentrated workloads; avoid mixed conflicting stimuli. Conceptual basis for weekly structure (accumulation vs realization).
