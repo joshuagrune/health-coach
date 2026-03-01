@@ -227,6 +227,93 @@ function deriveMaxHard(intake) {
   return { low: 2, moderate: 3, high: 4, advanced: 5 }[intake.baseline?.perceivedFitness || 'moderate'] ?? 3;
 }
 
+/**
+ * Compute the current marathon training phase from the race date.
+ * Phases scale automatically to available prep time (8 or 32 weeks).
+ *
+ * - Taper: always last 3 weeks (volume down, intensity maintained)
+ * - Peak:  1 week before taper (highest LR)
+ * - Build: ~35% of remaining weeks (quality + marathon pace)
+ * - Base:  everything earlier (aerobic foundation)
+ */
+function getMarathonPhase(raceDateStr, today) {
+  if (!raceDateStr) return null;
+  const daysToRace = diffDays(raceDateStr, today);
+  if (daysToRace < 0) return { phase: 'post', weeksToRace: 0 };
+
+  const weeksToRace = Math.ceil(daysToRace / 7);
+  const TAPER_WEEKS = 3;
+  const PEAK_WEEKS  = 1;
+
+  if (weeksToRace <= TAPER_WEEKS) {
+    return { phase: 'taper', weeksToRace, taperWeek: TAPER_WEEKS - weeksToRace + 1 };
+  }
+  if (weeksToRace <= TAPER_WEEKS + PEAK_WEEKS) {
+    return { phase: 'peak', weeksToRace };
+  }
+
+  const remaining  = weeksToRace - TAPER_WEEKS - PEAK_WEEKS;
+  const buildWeeks = Math.max(2, Math.round(remaining * 0.35));
+  const baseWeeks  = remaining - buildWeeks;
+
+  if (weeksToRace <= TAPER_WEEKS + PEAK_WEEKS + buildWeeks) {
+    const weeksIntoBuild = (TAPER_WEEKS + PEAK_WEEKS + buildWeeks) - weeksToRace + 1;
+    return { phase: 'build', weeksToRace, weeksIntoBuild, buildWeeks };
+  }
+
+  const weeksIntoBase = baseWeeks - (weeksToRace - TAPER_WEEKS - PEAK_WEEKS - buildWeeks) + 1;
+  return { phase: 'base', weeksToRace, weeksIntoBase, baseWeeks };
+}
+
+/**
+ * Compute LR duration for the current marathon phase.
+ * Progresses linearly Base → Build → Peak, then drops during Taper.
+ * Falls back to baseline anchor when no phase info is available.
+ */
+function computeLRDuration(baseline, maxMinutes, marathonPhase, deload) {
+  const startMin = Math.max(30, baseline?.longestRecentRunMinutes ?? 50);
+  // Peak LR target: 2.2× starting baseline, min 90 min, capped at maxMinutes
+  // (For a 4h marathon goal on 90 min/day constraint, user should raise maxMinutesPerDay for LR days)
+  const peakLR = Math.min(maxMinutes, Math.max(90, Math.round(startMin * 2.2)));
+
+  if (!marathonPhase || marathonPhase.phase === 'post') {
+    return Math.max(20, Math.min(maxMinutes, Math.round(startMin * (deload ? 0.55 : 1.0))));
+  }
+
+  let duration;
+  switch (marathonPhase.phase) {
+    case 'base': {
+      const targetEndBase = Math.round(peakLR * 0.75);
+      const p = marathonPhase.baseWeeks > 1
+        ? (marathonPhase.weeksIntoBase - 1) / (marathonPhase.baseWeeks - 1) : 1;
+      duration = Math.round(startMin + (targetEndBase - startMin) * p);
+      break;
+    }
+    case 'build': {
+      const startBuild = Math.round(peakLR * 0.75);
+      const p = marathonPhase.buildWeeks > 1
+        ? (marathonPhase.weeksIntoBuild - 1) / (marathonPhase.buildWeeks - 1) : 1;
+      duration = Math.round(startBuild + (peakLR - startBuild) * p);
+      break;
+    }
+    case 'peak':
+      duration = peakLR;
+      break;
+    case 'taper': {
+      // Volume drops 25%/40%/60% over 3 taper weeks (Mujika & Padilla 2003)
+      const taperFactors = [0.75, 0.60, 0.40];
+      duration = Math.round(peakLR * taperFactors[Math.min(marathonPhase.taperWeek - 1, 2)]);
+      break;
+    }
+    default:
+      duration = startMin;
+  }
+
+  // ACWR deload stacks on top (but not during taper — taper already cuts volume)
+  if (deload && marathonPhase.phase !== 'taper') duration = Math.round(duration * 0.55);
+  return Math.max(20, Math.min(maxMinutes, duration));
+}
+
 function collectRecentSignals(workouts, today, scores = null) {
   const normalized = workouts.map(normalizeWorkout).filter((w) => !!w.localDate);
   const recent = normalized.filter((w) => {
@@ -424,39 +511,78 @@ function buildStrengthSessions({ intake, targets, slots, maxMinutes, avoidHardDa
   }));
 }
 
-function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, maxMinutes, endurancePerWeek) {
+/**
+ * Build ordered list of endurance session specs for the week.
+ * Phase-aware for marathon milestones: Base/Build/Peak/Taper each produce
+ * a different session mix and LR duration.
+ *
+ * Base:  LR (short→medium) + Z2 + Tempo only (no Intervals — aerobic foundation first)
+ * Build: LR (medium→long) + Z2 + Intervals/Tempo alternating + Marathon Pace
+ * Peak:  LR (longest) + Tempo + Intervals (both quality types in one week)
+ * Taper: LR (shortened) + one quality session (shorter) — volume down, sharpness up
+ */
+function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, maxMinutes, endurancePerWeek, marathonPhase = null) {
   const specs = [];
   const isOddWeek = weekSeed % 2 === 1;
+  const phase = marathonPhase?.phase ?? null;
+  const isMarathon = enduranceMilestone?.kind === 'marathon' || enduranceMilestone?.subKind === 'marathon';
 
-  // LR duration anchored to baseline, capped at maxMinutes.
-  // Deload applies the same 0.55 factor as other hard sessions.
+  // LR duration: phase-progressive for marathon, baseline-anchored otherwise
   const lrAnchorFull = Math.max(30, Math.min(baseline?.longestRecentRunMinutes ?? 70, 150));
-  const lrDuration = Math.min(maxMinutes, Math.round(lrAnchorFull * (deload ? 0.55 : 1.0)));
+  const lrDuration = isMarathon && marathonPhase
+    ? computeLRDuration(baseline, maxMinutes, marathonPhase, deload)
+    : Math.min(maxMinutes, Math.round(lrAnchorFull * (deload ? 0.55 : 1.0)));
+
   specs.push({ kind: 'LR', title: 'Long Run', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: lrDuration, intensity: 'easy' }, ruleRefs: ['RULE_KEY_WORKOUT_PRIORITY'] });
 
-  // Z2 duration per session scales with weekly volume and training frequency.
-  // More Z2 sessions per week → shorter each (total volume stays proportional).
-  // All Z2 sessions get the same duration — no arbitrary primary/secondary split.
-  // Explicit baseline.z2DurationMinutes overrides the formula.
-  // Z2 uses a lighter deload factor (0.75) than hard sessions (0.55) — preserving
-  // aerobic stimulus during deload (Bosquet & Mujika 2012).
-  const Z2_DELOAD_FACTOR = 0.75;
-  // z2Count = planned endurance sessions minus LR and quality session
+  // Z2 duration per session — lighter deload factor to preserve aerobic stimulus (Bosquet & Mujika 2012)
+  const Z2_DELOAD_FACTOR = phase === 'taper' ? 0.6 : 0.75;
   const z2Count = Math.max(1, (endurancePerWeek || 2) - 2);
   const z2Duration = Math.min(maxMinutes, Math.round(
     ((baseline?.z2DurationMinutes > 0)
       ? baseline.z2DurationMinutes
       : Math.max(20, Math.min(Math.round(lrAnchorFull * 1.3 / z2Count), 80)))
-    * (deload ? Z2_DELOAD_FACTOR : 1.0)
+    * (deload || phase === 'taper' ? Z2_DELOAD_FACTOR : 1.0)
   ));
 
-  specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
-  if (isOddWeek) {
+  if (phase === 'base' && isMarathon) {
+    // Base: aerobic foundation — Z2 + Tempo only (no Intervals yet)
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    specs.push({ kind: 'Tempo', title: 'Tempo', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 30, intensity: 'threshold' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+  } else if (phase === 'build' && isMarathon) {
+    // Build: introduce quality + Marathon Pace runs
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
+    if (isOddWeek) {
+      specs.push({ kind: 'Intervals', title: 'Intervals (5K pace)', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 35, workBouts: '6x1min', recovery: '1min jog', intensity: 'VO2max' }, ruleRefs: ['RULE_HIIT_FREQUENCY'] });
+    } else {
+      specs.push({ kind: 'Tempo', title: 'Marathon Pace', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 40, intensity: 'marathon_pace', note: 'Comfortable hard — target race pace' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
+    }
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
+  } else if (phase === 'peak' && isMarathon) {
+    // Peak: both quality types in same week, longest LR
+    specs.push({ kind: 'Tempo', title: 'Marathon Pace', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 45, intensity: 'marathon_pace', note: 'Race simulation effort' }, ruleRefs: ['RULE_MARATHON_PHASE_PEAK'] });
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_PEAK'] });
     specs.push({ kind: 'Intervals', title: 'Intervals (5K pace)', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 35, workBouts: '6x1min', recovery: '1min jog', intensity: 'VO2max' }, ruleRefs: ['RULE_HIIT_FREQUENCY'] });
+  } else if (phase === 'taper' && isMarathon) {
+    // Taper: volume down sharply, keep one quality session short + sharp
+    const taperQuality = marathonPhase.taperWeek <= 2
+      ? { kind: 'Tempo', title: 'Tempo (short)', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: Math.min(25, maxMinutes), intensity: 'threshold', note: 'Short and sharp — maintain neuromuscular sharpness' }, ruleRefs: ['RULE_TAPER_QUALITY'] }
+      : { kind: 'Z2', title: 'Zone 2 (race week)', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: Math.min(30, maxMinutes), intensity: 'Z2', note: 'Easy shakeout — legs fresh for race' }, ruleRefs: ['RULE_TAPER_RACE_WEEK'] };
+    specs.push(taperQuality);
+    if (marathonPhase.taperWeek <= 2) {
+      specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    }
   } else {
-    specs.push({ kind: 'Tempo', title: 'Tempo', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 30, intensity: 'threshold' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
+    // Default (no marathon phase or non-marathon): original alternating logic
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
+    if (isOddWeek) {
+      specs.push({ kind: 'Intervals', title: 'Intervals (5K pace)', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 35, workBouts: '6x1min', recovery: '1min jog', intensity: 'VO2max' }, ruleRefs: ['RULE_HIIT_FREQUENCY'] });
+    } else {
+      specs.push({ kind: 'Tempo', title: 'Tempo', hardness: 'hard', requiresRecovery: true, targets: { durationMinutes: 30, intensity: 'threshold' }, ruleRefs: ['RULE_MARATHON_PHASE_BUILD'] });
+    }
+    specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
   }
-  specs.push({ kind: 'Z2', title: 'Zone 2', hardness: 'easy', requiresRecovery: false, targets: { durationMinutes: z2Duration, intensity: 'Z2' }, ruleRefs: ['RULE_MARATHON_PHASE_BASE'] });
 
   if (enduranceMilestone?.subKind && /triathlon|cycling/.test(enduranceMilestone.subKind)) {
     specs[0].title = 'Long Endurance';
@@ -465,13 +591,13 @@ function buildEnduranceSpecs(enduranceMilestone, weekSeed, deload, baseline, max
   return specs;
 }
 
-function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals, maxMinutes, baseline }) {
+function buildEnduranceSessions({ enduranceMilestone, targets, slots, recentSignals, maxMinutes, baseline, marathonPhase = null }) {
   const sessions = [];
   const usedDates = new Set();
   const usedHardDates = new Set();
   const weekSeed = Math.floor(new Date(slots[0]?.dateStr || new Date().toISOString().slice(0, 10)).getTime() / (7 * 24 * 60 * 60 * 1000));
 
-  const specs = buildEnduranceSpecs(enduranceMilestone, weekSeed, targets.deload, baseline, maxMinutes, targets.endurancePerWeek);
+  const specs = buildEnduranceSpecs(enduranceMilestone, weekSeed, targets.deload, baseline, maxMinutes, targets.endurancePerWeek, marathonPhase);
   const desired = Math.min(targets.endurancePerWeek, slots.length);
   let created = 0;
 
@@ -558,22 +684,25 @@ function applyGuardrails(sessions, recentHardCount = 0, maxHardPerWeek = 3) {
 
 /**
  * Downgrade session intensity based on today's readiness score.
- * Only affects the first planned slot (nearest future date).
+ * Only affects the first planned slot when it is today or tomorrow —
+ * readiness has no predictive value for sessions 2+ days out.
  * readiness < 50  → downgrade Intervals/Tempo/LR to Z2 on first slot
  * readiness 50–65 → downgrade only Intervals/Tempo to Z2 on first slot
  * readiness > 65  → no change
  * When data quality is insufficient, skip gating entirely.
  */
-function applyReadinessGating(sessions, readiness) {
-  if (!readiness || readiness.dataQuality === 'insufficient') return sessions;
+function applyReadinessGating(sessions, readiness, today) {
+  if (!readiness || readiness.dataQuality === 'insufficient') return { sessions, readinessGated: false };
   const score = readiness.score;
-  if (score > 65) return sessions;
+  if (score > 65) return { sessions, readinessGated: false };
 
   const sorted = [...sessions].sort((a, b) => a.localDate.localeCompare(b.localDate));
-  if (sorted.length === 0) return sessions;
+  if (sorted.length === 0) return { sessions, readinessGated: false };
   const firstDate = sorted[0].localDate;
+  const daysUntilFirst = diffDays(firstDate, today);
+  if (daysUntilFirst > 1) return { sessions, readinessGated: false }; // session 2+ days away: today's readiness not predictive
 
-  return sessions.map((s) => {
+  const gated = sessions.map((s) => {
     if (s.localDate !== firstDate) return s;
     const shouldDowngrade = score < 50
       ? ['LR', 'Tempo', 'Intervals'].includes(s.kind)
@@ -588,6 +717,8 @@ function applyReadinessGating(sessions, readiness) {
       readinessGated: true,
     };
   });
+  const didGate = gated.some((s) => s.readinessGated === true);
+  return { sessions: gated, readinessGated: didGate };
 }
 
 function enforceNoMixedModalityPerDay(sessions) {
@@ -623,7 +754,7 @@ function enforceNoMixedModalityPerDay(sessions) {
   return sessions.filter((s) => !toRemove.has(s.id));
 }
 
-function buildRecommendations(goals, targets, readiness = null) {
+function buildRecommendations(goals, targets, readiness = null, readinessGated = false, marathonPhase = null) {
   const recs = [];
   if ((goals || []).some((g) => g.kind === 'sleep')) {
     recs.push({ kind: 'sleep', title: 'Sleep protocol', text: 'Aim for 7-9h sleep. Keep bedtime and wake time consistent.' });
@@ -632,7 +763,7 @@ function buildRecommendations(goals, targets, readiness = null) {
     recs.push({ kind: 'bodycomp', title: 'Nutrition', text: 'Prioritize protein and place carbs around training sessions.' });
   }
   recs.push({ kind: 'planning', title: 'Rolling plan', text: 'Only next 7 days are fixed. Replan weekly from recent execution and recovery.' });
-  if (readiness != null && readiness.score <= 65 && readiness.dataQuality !== 'insufficient') {
+  if (readinessGated && readiness != null && readiness.score <= 65 && readiness.dataQuality !== 'insufficient') {
     const label = readiness.label || 'low';
     const score = readiness.score;
     const msg = score < 50
@@ -644,6 +775,23 @@ function buildRecommendations(goals, targets, readiness = null) {
     const acwrNote = targets.acwr != null ? ` (ACWR ${targets.acwr})` : '';
     recs.push({ kind: 'recovery', title: 'Deload signal', text: `Acute:Chronic load ratio is elevated${acwrNote}. Volume reduced ~45% this week. Intensity stays — only tonnage drops.` });
   }
+  if (marathonPhase) {
+    const phaseLabels = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper', post: 'Post-race' };
+    const phaseLabel = phaseLabels[marathonPhase.phase] || marathonPhase.phase;
+    const weeksNote = marathonPhase.weeksToRace ? ` (${marathonPhase.weeksToRace} weeks to race)` : '';
+    const phaseTexts = {
+      base:  'Focus: aerobic foundation. Easy runs dominate. Tempo keeps the engine sharp but no hard intervals yet.',
+      build: 'Focus: race-specific quality. Marathon Pace runs + Intervals alternate. LR getting longer.',
+      peak:  'Focus: sharpest week. Longest LR + both quality sessions. Trust the training — back off next week.',
+      taper: `Focus: freshness. Volume drops ${['25%', '40%', '60%'][Math.min((marathonPhase.taperWeek || 1) - 1, 2)]}, intensity maintained. Don't add extra sessions.`,
+      post:  'Race complete. Easy recovery only — no hard sessions for at least 2 weeks.',
+    };
+    recs.push({
+      kind: 'marathon_phase',
+      title: `Marathon phase: ${phaseLabel}${weeksNote}`,
+      text: phaseTexts[marathonPhase.phase] || `Current phase: ${phaseLabel}.`,
+    });
+  }
   return recs;
 }
 
@@ -654,15 +802,32 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
       : (hasStrength || hasGeneral) ? 'strength_only'
         : 'strength_only';
 
-  const maxMinutes = constraints.maxMinutesPerDay || 90;
+  const baseMax = constraints.maxMinutesPerDay || 120;
   const maxHardPerWeek = deriveMaxHard(intake);
   const recentSignals = collectRecentSignals(workouts, today, scores);
   const slots = buildRollingSlots(today, constraints).filter((s) => !recentSignals.completedDates.has(s.dateStr));
   const targets = estimateTargets(intake, profile, mode, recentSignals);
 
+  // Marathon phase — computed from the nearest marathon milestone's race date
+  const marathonMilestone = intake.milestones?.find((m) => m.kind === 'marathon')
+    || intake.goals?.find((g) => g.subKind === 'marathon' && g.dateLocal);
+  const marathonPhase = getMarathonPhase(marathonMilestone?.dateLocal ?? null, today);
+
+  // Marathon prep: bump cap so LR can reach 2h+ at peak — use at least 150 min (user constraint respected if higher)
+  const MARATHON_LR_MIN_MINUTES = 150;
+  const maxMinutes = (marathonPhase && marathonPhase.phase !== 'taper' && marathonPhase.phase !== 'post')
+    ? Math.max(baseMax, MARATHON_LR_MIN_MINUTES)
+    : baseMax;
+
   // Subtract already-completed sessions from this week's remaining targets.
   // This prevents the generator from stacking more endurance on top of sessions already done.
-  const remainingEndurance = Math.max(0, targets.endurancePerWeek - recentSignals.completedEndurance);
+  // During taper: also reduce endurance frequency (volume down, intensity maintained).
+  let enduranceTarget = targets.endurancePerWeek;
+  if (marathonPhase?.phase === 'taper') {
+    const taperFreqFactors = [1.0, 0.7, 0.4]; // taper weeks 1/2/3
+    enduranceTarget = Math.max(1, Math.round(enduranceTarget * taperFreqFactors[Math.min(marathonPhase.taperWeek - 1, 2)]));
+  }
+  const remainingEndurance = Math.max(0, enduranceTarget - recentSignals.completedEndurance);
   const remainingStrength = Math.max(0, targets.strengthPerWeek - recentSignals.completedStrength);
   const adjustedTargets = { ...targets, endurancePerWeek: remainingEndurance, strengthPerWeek: remainingStrength };
 
@@ -677,7 +842,7 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
   if (mode === 'strength_only') {
     sessions = buildStrengthSessions({ intake, targets: adjustedTargets, slots, maxMinutes, recentHardDates: planningSignals.hardDates });
   } else if (mode === 'endurance_only') {
-    sessions = buildEnduranceSessions({ enduranceMilestone, targets: adjustedTargets, slots, recentSignals: planningSignals, maxMinutes, baseline });
+    sessions = buildEnduranceSessions({ enduranceMilestone, targets: adjustedTargets, slots, recentSignals: planningSignals, maxMinutes, baseline, marathonPhase });
   } else {
     const enduranceSlots = slots.filter((s, i) => i % 2 === 0);
     const strengthSlots = slots.filter((s, i) => i % 2 === 1);
@@ -689,6 +854,7 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
       recentSignals: planningSignals,
       maxMinutes,
       baseline,
+      marathonPhase,
     }) : [];
     const strengthSessions = remainingStrength > 0 ? buildStrengthSessions({
       intake,
@@ -704,8 +870,8 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
   }
 
   sessions = applyGuardrails(sessions, recentSignals.hardCount, maxHardPerWeek);
-  sessions = applyReadinessGating(sessions, recentSignals.readiness);
-  sessions = sessions.sort((a, b) => a.localDate.localeCompare(b.localDate));
+  const { sessions: readinessGatedSessions, readinessGated } = applyReadinessGating(sessions, recentSignals.readiness, today);
+  sessions = readinessGatedSessions.sort((a, b) => a.localDate.localeCompare(b.localDate));
 
   const blueprint = {
     mode,
@@ -732,11 +898,12 @@ function orchestrate(intake, profile, workouts, today, constraints, scores = nul
       acwrSource: recentSignals.acwrSource,
     },
     readiness: recentSignals.readiness ?? null,
+    marathonPhase: marathonPhase ?? null,
   };
 
   return {
     sessions,
-    recommendations: buildRecommendations(intake.goals || [], targets, recentSignals.readiness),
+    recommendations: buildRecommendations(intake.goals || [], targets, recentSignals.readiness, readinessGated, marathonPhase),
     blueprint,
   };
 }
